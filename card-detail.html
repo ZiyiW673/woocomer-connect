@@ -1,0 +1,624 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Card Detail</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #080a10;
+      --panel: rgba(11, 13, 20, 0.9);
+      --panel-strong: rgba(15, 19, 29, 0.98);
+      --ink: #f5f7ff;
+      --muted: #9aa2b5;
+      --accent: #1f6fee;
+      --line: #1d2534;
+    }
+    * {
+      box-sizing: border-box;
+    }
+    body {
+      margin: 0;
+      font-family: "Inter", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: radial-gradient(circle at top, #171d2c, #05060a 50%);
+      color: var(--ink);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+    a {
+      color: inherit;
+    }
+    .page-header {
+      padding: 28px 24px 12px;
+      margin: 0 auto;
+      width: min(1100px, 100%);
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .page-header .back-button {
+      align-self: flex-start;
+      background: rgba(31, 111, 238, 0.12);
+      border: 1px solid rgba(31, 111, 238, 0.32);
+      border-radius: 999px;
+      color: var(--accent);
+      font-size: 0.92rem;
+      font-weight: 600;
+      padding: 8px 16px;
+      cursor: pointer;
+      transition: background 0.2s ease, border-color 0.2s ease;
+    }
+    .page-header .back-button:hover,
+    .page-header .back-button:focus-visible {
+      background: rgba(31, 111, 238, 0.2);
+      border-color: rgba(31, 111, 238, 0.5);
+      outline: none;
+    }
+    .page-header h1 {
+      margin: 0;
+      font-size: clamp(1.8rem, 3vw + 1rem, 2.6rem);
+      letter-spacing: 0.02em;
+    }
+    main {
+      width: min(1100px, 100%);
+      margin: 0 auto;
+      padding: 0 24px 64px;
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 24px;
+    }
+    .status {
+      text-align: center;
+      color: var(--muted);
+      font-size: 1rem;
+      padding: 32px 0;
+    }
+    .card-detail[hidden] {
+      display: none;
+    }
+    .card-detail {
+      background: var(--panel-strong);
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      box-shadow: 0 22px 60px rgba(5, 7, 12, 0.5);
+      padding: 28px;
+      display: flex;
+      flex-direction: column;
+      gap: 32px;
+    }
+    .card-layout {
+      display: grid;
+      grid-template-columns: minmax(0, 320px) minmax(0, 1fr);
+      gap: 32px;
+      align-items: flex-start;
+    }
+    @media (max-width: 900px) {
+      .card-layout {
+        grid-template-columns: 1fr;
+      }
+    }
+    .card-visual {
+      display: grid;
+      gap: 16px;
+      justify-items: center;
+    }
+    .card-image-frame {
+      background: linear-gradient(145deg, rgba(31, 111, 238, 0.26), rgba(9, 11, 18, 0.65));
+      border-radius: 20px;
+      padding: 16px;
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,0.04), 0 24px 50px rgba(0, 0, 0, 0.6);
+    }
+    .card-image-frame img {
+      display: block;
+      max-width: min(100%, 320px);
+      border-radius: 14px;
+      border: 1px solid rgba(255,255,255,0.14);
+      background: #05060c;
+      box-shadow: 0 24px 48px rgba(0,0,0,0.55);
+    }
+    .card-summary {
+      display: grid;
+      gap: 18px;
+    }
+    .stat-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 16px;
+    }
+    .stat {
+      background: rgba(14, 16, 24, 0.82);
+      border: 1px solid rgba(33, 41, 58, 0.85);
+      border-radius: 12px;
+      padding: 12px 14px;
+      display: grid;
+      gap: 6px;
+    }
+    .stat span {
+      display: block;
+    }
+    .stat .label {
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      font-size: 0.7rem;
+    }
+    .stat .value {
+      font-size: 1rem;
+      font-weight: 600;
+      line-height: 1.4;
+      word-break: break-word;
+    }
+    .detail-section {
+      display: grid;
+      gap: 12px;
+      background: rgba(13, 15, 23, 0.85);
+      border: 1px solid rgba(34, 43, 60, 0.9);
+      border-radius: 14px;
+      padding: 20px 22px;
+    }
+    .detail-section[hidden] {
+      display: none;
+    }
+    .detail-section h2 {
+      margin: 0;
+      font-size: 1.15rem;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+    .detail-section p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 0.95rem;
+      line-height: 1.55;
+      white-space: pre-wrap;
+      word-break: break-word;
+      overflow-wrap: anywhere;
+    }
+    .entry-list {
+      display: grid;
+      gap: 16px;
+    }
+    .entry {
+      background: rgba(10, 12, 20, 0.9);
+      border: 1px solid rgba(38, 47, 67, 0.9);
+      border-radius: 12px;
+      padding: 16px;
+      display: grid;
+      gap: 8px;
+    }
+    .entry header {
+      padding: 0;
+      margin: 0;
+      width: 100%;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .entry header h3 {
+      margin: 0;
+      font-size: 1.05rem;
+      word-break: break-word;
+      overflow-wrap: anywhere;
+    }
+    .entry header .meta {
+      color: var(--muted);
+      font-size: 0.85rem;
+      word-break: break-word;
+      overflow-wrap: anywhere;
+    }
+    .entry p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 0.95rem;
+      line-height: 1.5;
+      white-space: pre-wrap;
+      word-break: break-word;
+      overflow-wrap: anywhere;
+    }
+  </style>
+</head>
+<body>
+  <header class="page-header">
+    <button type="button" class="back-button" id="backButton">⟵ Back</button>
+    <h1 id="cardName">Card Detail</h1>
+  </header>
+  <main>
+    <div id="status" class="status">Loading card information…</div>
+    <article class="card-detail" id="cardDetail" hidden>
+      <div class="card-layout">
+        <div class="card-visual">
+          <div class="card-image-frame">
+            <img id="cardImage" alt="" loading="lazy">
+          </div>
+        </div>
+        <div class="card-summary">
+          <div class="stat-grid" id="statGrid"></div>
+        </div>
+      </div>
+      <section class="detail-section" id="abilitiesSection" hidden>
+        <h2>Abilities</h2>
+        <div class="entry-list" id="abilitiesList"></div>
+      </section>
+      <section class="detail-section" id="attacksSection" hidden>
+        <h2>Attacks</h2>
+        <div class="entry-list" id="attacksList"></div>
+      </section>
+      <section class="detail-section" id="rulesSection" hidden>
+        <h2>Rules</h2>
+        <div class="entry-list" id="rulesList"></div>
+      </section>
+    </article>
+  </main>
+  <script>
+  (function(){
+    const DATA_ROOT = './pokemon-tcg-data';
+
+    const statusEl = document.getElementById('status');
+    const detailEl = document.getElementById('cardDetail');
+    const nameEl = document.getElementById('cardName');
+    const imgEl = document.getElementById('cardImage');
+    const statGrid = document.getElementById('statGrid');
+    const abilitiesSection = document.getElementById('abilitiesSection');
+    const abilitiesList = document.getElementById('abilitiesList');
+    const attacksSection = document.getElementById('attacksSection');
+    const attacksList = document.getElementById('attacksList');
+    const rulesSection = document.getElementById('rulesSection');
+    const rulesList = document.getElementById('rulesList');
+    const backButton = document.getElementById('backButton');
+    const setMetadataCache = new Map();
+    let setIndexPromise = null;
+
+    if(backButton){
+      backButton.addEventListener('click', () => {
+        if(document.referrer){
+          history.back();
+        } else {
+          window.location.href = 'deck.html';
+        }
+      });
+    }
+
+    const params = new URLSearchParams(window.location.search);
+    const cardId = params.get('card_id') || params.get('id');
+
+    if(!cardId){
+      setStatus('No card selected. Provide a <code>card_id</code> in the URL.');
+      return;
+    }
+
+    loadCard(cardId.trim()).catch(err => {
+      console.error(err);
+      setStatus('Unable to load card information.');
+    });
+
+    async function loadCard(id){
+      setStatus('Fetching card details…');
+      const setId = extractSetId(id);
+      if(!setId){
+        setStatus('Unable to determine card set.');
+        return;
+      }
+      const cardMap = new Map();
+      await loadSet(setId, cardMap);
+      const card = cardMap.get(id);
+      if(!card){
+        setStatus('Card not found in the dataset.');
+        return;
+      }
+      renderCard(card);
+    }
+
+    function setStatus(message){
+      if(!message){
+        statusEl.innerHTML = '';
+        statusEl.style.display = 'none';
+      } else {
+        statusEl.innerHTML = message;
+        statusEl.style.display = '';
+      }
+    }
+
+    function renderCard(card){
+      setStatus('');
+      detailEl.hidden = false;
+      detailEl.removeAttribute('hidden');
+
+      const title = card.name || card.id;
+      nameEl.textContent = title;
+      document.title = `${title} – Card Detail`;
+
+      const imageSrc = card.images?.large || card.imageUrlHiRes || card.imageUrl || card.images?.small || '';
+      if(imageSrc){
+        imgEl.src = imageSrc;
+        imgEl.alt = `${title} card image`;
+      } else {
+        imgEl.alt = 'Card image unavailable';
+        imgEl.removeAttribute('src');
+      }
+
+      statGrid.innerHTML = '';
+      const stats = buildStats(card);
+      for(const [label, value] of stats){
+        if(!value) continue;
+        const stat = document.createElement('div');
+        stat.className = 'stat';
+        const labelEl = document.createElement('span');
+        labelEl.className = 'label';
+        labelEl.textContent = label;
+        const valueEl = document.createElement('span');
+        valueEl.className = 'value';
+        valueEl.textContent = value;
+        stat.append(labelEl, valueEl);
+        statGrid.appendChild(stat);
+      }
+
+      renderAbilities(card.abilities || []);
+      renderAttacks(card.attacks || []);
+      renderRules(card.rules || card.rule || []);
+    }
+
+    function buildStats(card){
+      const entries = [];
+      entries.push(['Supertype', card.supertype || '']);
+      entries.push(['Types', formatList(card.types)]);
+      entries.push(['HP', card.hp || '']);
+      entries.push(['Retreat Cost', formatRetreat(card.retreatCost, card.convertedRetreatCost)]);
+      entries.push(['Weakness', formatModifiers(card.weaknesses)]);
+      entries.push(['Resistances', formatModifiers(card.resistances)]);
+      entries.push(['Rarity', card.rarity || '']);
+      entries.push(['Set', formatSetInfo(card.set)]);
+      return entries.filter(([, value]) => Boolean(value));
+    }
+
+    function renderAbilities(abilities){
+      abilitiesList.innerHTML = '';
+      if(!abilities || !abilities.length){
+        abilitiesSection.hidden = true;
+        return;
+      }
+      for(const ability of abilities){
+        const item = document.createElement('div');
+        item.className = 'entry';
+        const header = document.createElement('header');
+        const title = document.createElement('h3');
+        title.textContent = ability.name || 'Ability';
+        header.appendChild(title);
+        if(ability.type){
+          const meta = document.createElement('div');
+          meta.className = 'meta';
+          meta.textContent = ability.type;
+          header.appendChild(meta);
+        }
+        item.appendChild(header);
+        if(ability.text){
+          const body = document.createElement('p');
+          body.textContent = ability.text;
+          item.appendChild(body);
+        }
+        abilitiesList.appendChild(item);
+      }
+      abilitiesSection.hidden = false;
+    }
+
+    function renderAttacks(attacks){
+      attacksList.innerHTML = '';
+      if(!attacks || !attacks.length){
+        attacksSection.hidden = true;
+        return;
+      }
+      for(const attack of attacks){
+        const item = document.createElement('div');
+        item.className = 'entry';
+        const header = document.createElement('header');
+        const title = document.createElement('h3');
+        title.textContent = attack.name || 'Attack';
+        header.appendChild(title);
+        const meta = document.createElement('div');
+        meta.className = 'meta';
+        const parts = [];
+        if(attack.cost?.length) parts.push(`Cost: ${formatList(attack.cost)}`);
+        if(attack.convertedEnergyCost) parts.push(`CEC: ${attack.convertedEnergyCost}`);
+        if(attack.damage) parts.push(`Damage: ${attack.damage}`);
+        meta.textContent = parts.join(' • ');
+        if(meta.textContent) header.appendChild(meta);
+        item.appendChild(header);
+        if(attack.text){
+          const body = document.createElement('p');
+          body.textContent = attack.text;
+          item.appendChild(body);
+        }
+        attacksList.appendChild(item);
+      }
+      attacksSection.hidden = false;
+    }
+
+    function renderRules(rules){
+      rulesList.innerHTML = '';
+      const items = Array.isArray(rules) ? rules : (rules ? [rules] : []);
+      const filtered = items.map(item => typeof item === 'string' ? item.trim() : '').filter(Boolean);
+      if(!filtered.length){
+        rulesSection.hidden = true;
+        return;
+      }
+      for(const text of filtered){
+        const item = document.createElement('div');
+        item.className = 'entry';
+        const body = document.createElement('p');
+        body.textContent = text;
+        item.appendChild(body);
+        rulesList.appendChild(item);
+      }
+      rulesSection.hidden = false;
+    }
+    async function loadSet(setId, cardMap){
+      const paths = [
+        `${DATA_ROOT}/cards/en/${setId}.json`,
+        `${DATA_ROOT}/cards/${setId}.json`,
+        `${DATA_ROOT}/${setId}.json`
+      ];
+      for(const path of paths){
+        try {
+          const res = await fetch(path, { cache: 'no-cache' });
+          if(!res.ok) continue;
+          const text = await res.text();
+          const cards = normaliseSetJSON(text);
+          if(!cards.length) continue;
+          const setMeta = await getSetMetadata(setId);
+          for(const card of cards){
+            if(!card?.id) continue;
+            hydrateCardSet(card, setId, setMeta);
+            cardMap.set(card.id, card);
+          }
+          return;
+        } catch (err) {
+          console.warn('Set load failed', setId, err);
+        }
+      }
+      console.warn('Set not found for', setId);
+    }
+
+    async function getSetMetadata(setId){
+      if(!setId) return null;
+      const key = String(setId).toLowerCase();
+      if(setMetadataCache.has(key)) return setMetadataCache.get(key);
+      const index = await loadSetIndex();
+      const match = index.find(item => String(item?.id || '').toLowerCase() === key) || null;
+      setMetadataCache.set(key, match);
+      return match;
+    }
+
+    async function loadSetIndex(){
+      if(setIndexPromise) return setIndexPromise;
+      const paths = [
+        `${DATA_ROOT}/sets/en.json`,
+        `${DATA_ROOT}/sets.json`,
+        `${DATA_ROOT}/sets/all.json`
+      ];
+      setIndexPromise = (async () => {
+        for(const path of paths){
+          try {
+            const res = await fetch(path, { cache: 'no-cache' });
+            if(!res.ok) continue;
+            const text = await res.text();
+            const sets = normaliseSetMetaJSON(text);
+            if(sets.length) return sets;
+          } catch (err) {
+            console.warn('Set metadata load failed', path, err);
+          }
+        }
+        console.warn('Set metadata index not found.');
+        return [];
+      })();
+      return setIndexPromise;
+    }
+
+    function normaliseSetMetaJSON(text){
+      try {
+        const parsed = JSON.parse(text);
+        if(Array.isArray(parsed)) return parsed;
+        if(Array.isArray(parsed?.data)) return parsed.data;
+        if(Array.isArray(parsed?.sets)) return parsed.sets;
+        const values = Object.values(parsed || {}).filter(v => Array.isArray(v));
+        if(values.length) return values.flat();
+      } catch (err) {
+        const lines = text.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+        const manual = [];
+        for(const line of lines){
+          try {
+            const item = JSON.parse(line);
+            if(item && typeof item === 'object') manual.push(item);
+          } catch (e) {}
+        }
+        if(manual.length) return manual;
+      }
+      return [];
+    }
+
+    function hydrateCardSet(card, setId, meta){
+      if(!card) return;
+      const current = card.set && typeof card.set === 'object' ? { ...card.set } : {};
+      const info = meta && typeof meta === 'object' ? { ...meta } : {};
+      const merged = { ...info, ...current };
+      merged.id = merged.id || info.id || setId || '';
+      if(info.images || current.images){
+        merged.images = { ...(info.images || {}), ...(current.images || {}) };
+      }
+      if(info.legalities || current.legalities){
+        merged.legalities = { ...(info.legalities || {}), ...(current.legalities || {}) };
+      }
+      card.set = merged;
+    }
+
+    function normaliseSetJSON(text){
+      try {
+        const parsed = JSON.parse(text);
+        if(Array.isArray(parsed)) return parsed;
+        if(Array.isArray(parsed?.data)) return parsed.data;
+        if(Array.isArray(parsed?.cards)) return parsed.cards;
+        const values = Object.values(parsed || {}).filter(v => Array.isArray(v));
+        if(values.length) return values.flat();
+      } catch (err) {
+        const lines = text.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+        const manual = [];
+        for(const line of lines){
+          try {
+            const item = JSON.parse(line);
+            if(item && typeof item === 'object') manual.push(item);
+          } catch (e) {}
+        }
+        if(manual.length) return manual;
+      }
+      return [];
+    }
+
+    function extractSetId(cardId){
+      if(!cardId) return '';
+      const match = String(cardId).match(/^([^-]+)/);
+      if(match) return match[1];
+      const trimmed = String(cardId).replace(/\d+.*$/, '');
+      return trimmed || '';
+    }
+
+    function formatList(value){
+      if(!value) return '';
+      if(Array.isArray(value)){
+        return value.filter(Boolean).join(', ');
+      }
+      return String(value);
+    }
+
+    function formatRetreat(cost, converted){
+      if(!cost || !cost.length){
+        return converted ? `Converted: ${converted}` : '';
+      }
+      const costText = cost.join(', ');
+      if(converted){
+        return `${costText} (Converted: ${converted})`;
+      }
+      return costText;
+    }
+
+    function formatModifiers(list){
+      if(!Array.isArray(list) || !list.length) return '';
+      return list.map(item => {
+        const type = item?.type || '';
+        const value = item?.value || '';
+        return value ? `${type} (${value})` : type;
+      }).filter(Boolean).join(', ');
+    }
+
+    function formatSetInfo(info){
+      if(!info) return '';
+      if(typeof info === 'string') return info;
+      const name = info.name || '';
+      const id = info.id || info.code || '';
+      if(name) return name;
+      return id;
+    }
+  })();
+  </script>
+</body>
+</html>
