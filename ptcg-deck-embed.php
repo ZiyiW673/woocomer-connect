@@ -1,52 +1,15 @@
 <?php
 /**
  * Plugin Name: PTCG Deck Showcase
- * Description: Custom Elementor widget(s) for PTCG.
+ * Description: Admin inventory management for WooCommerce decks.
  * Version: 1.0.0
  */
 if (!defined('ABSPATH')) exit;
 
-// Load only after plugins are available.
-add_action('plugins_loaded', function () {
-  // Require Elementor to be active and loaded.
-  if (!did_action('elementor/loaded') || !class_exists('\Elementor\Widget_Base')) {
-    add_action('admin_notices', function () {
-      echo '<div class="notice notice-error"><p><strong>PTCG Deck Showcase</strong> requires the Elementor plugin to be installed & activated.</p></div>';
-    });
-    return; // Prevents "Class Elementor\Widget_Base not found" fatals.
-  }
-
-  // Register widgets only after Elementor is ready.
-  add_action('elementor/widgets/register', function ($widgets_manager) {
-    // If your widget class is in this same file, ensure the class definition comes before this callback.
-    // Or include it from a separate file, e.g.:
-    // require __DIR__ . '/includes/class-ptcg-deck-widget.php';
-
-    // Example minimal skeleton to avoid early fatals:
-    if (!class_exists('PTCG_Deck_Widget') && class_exists('\Elementor\Widget_Base')) {
-      class PTCG_Deck_Widget extends \Elementor\Widget_Base {
-        public function get_name(){ return 'ptcg_deck_widget'; }
-        public function get_title(){ return 'PTCG Deck Widget'; }
-        public function get_icon(){ return 'eicon-library-download'; }
-        public function get_categories(){ return [ 'general' ]; }
-        protected function register_controls(){ /* your controls here */ }
-        protected function render(){ echo '<div>PTCG Deck Widget</div>'; }
-      }
-    }
-
-    $widgets_manager->register(new \PTCG_Deck_Widget());
-  });
-});
 define('PTCGDM_DIR', plugin_dir_path(__FILE__));
 define('PTCGDM_URL', plugin_dir_url(__FILE__));
-define('PTCGDM_DATA_DIR', PTCGDM_DIR . 'pokemon-tcg-data'); // dataset lives here
+define('PTCGDM_DATA_DIR', PTCGDM_DIR . 'pokemon-tcg-data');
 define('PTCGDM_PRODUCT_IMAGE_SIZE', 512);
-define('PTCGDM_DEFAULT_DECK_SUBDIR', 'deck-list');
-define('PTCGDM_OPT_HEIGHT', 'ptcgdm_height');
-define('PTCGDM_OPT_DECK_SUBDIR', 'ptcgdm_deck_subdir');
-define('PTCGDM_OPT_DECK_REVIEW_BASE_URL', 'ptcgdm_deck_review_base_url');
-define('PTCGDM_OPT_LIBRARY_VIEW_ALL_URL', 'ptcgdm_library_view_all_url');
-define('PTCGDM_OPT_DECK_VISIBILITY', 'ptcgdm_deck_visibility');
 define('PTCGDM_INVENTORY_SUBDIR', 'card-inventory');
 define('PTCGDM_INVENTORY_FILENAME', 'card-inventory.json');
 define('PTCGDM_INVENTORY_VARIANTS', [
@@ -56,7 +19,8 @@ define('PTCGDM_INVENTORY_VARIANTS', [
   'stamped'     => 'Stamped',
 ]);
 
-function ptcgdm_sanitize_deck_filename($filename) {
+
+function ptcgdm_sanitize_json_filename($filename) {
   $filename = basename((string) $filename);
   if ($filename === '' || pathinfo($filename, PATHINFO_EXTENSION) !== 'json') {
     return '';
@@ -66,169 +30,12 @@ function ptcgdm_sanitize_deck_filename($filename) {
   }
   return $filename;
 }
-
-function ptcgdm_get_deck_visibility_map() {
-  $map = get_option(PTCGDM_OPT_DECK_VISIBILITY, []);
-  if (!is_array($map)) {
-    $map = [];
-  }
-  $normalized = [];
-  foreach ($map as $file => $flag) {
-    $clean = ptcgdm_sanitize_deck_filename($file);
-    if (!$clean) {
-      continue;
-    }
-    $normalized[$clean] = $flag ? 1 : 0;
-  }
-  if ($normalized !== $map) {
-    update_option(PTCGDM_OPT_DECK_VISIBILITY, $normalized);
-  }
-  return $normalized;
-}
-
-function ptcgdm_is_deck_visible($filename) {
-  $filename = ptcgdm_sanitize_deck_filename($filename);
-  if (!$filename) {
-    return true;
-  }
-  $map = ptcgdm_get_deck_visibility_map();
-  if (!array_key_exists($filename, $map)) {
-    return true;
-  }
-  return !empty($map[$filename]);
-}
-
-function ptcgdm_set_deck_visibility($filename, $visible) {
-  $filename = ptcgdm_sanitize_deck_filename($filename);
-  if (!$filename) {
-    return false;
-  }
-  $map = ptcgdm_get_deck_visibility_map();
-  $map[$filename] = $visible ? 1 : 0;
-  update_option(PTCGDM_OPT_DECK_VISIBILITY, $map);
-  return true;
-}
-
-function ptcgdm_remove_deck_visibility($filename) {
-  $filename = ptcgdm_sanitize_deck_filename($filename);
-  if (!$filename) {
-    return;
-  }
-  $map = ptcgdm_get_deck_visibility_map();
-  if (isset($map[$filename])) {
-    unset($map[$filename]);
-    update_option(PTCGDM_OPT_DECK_VISIBILITY, $map);
-  }
-}
-
-function ptcgdm_prune_visibility_map(array $files) {
-  $map = ptcgdm_get_deck_visibility_map();
-  if (!$map) {
-    return;
-  }
-  $existing = [];
-  foreach ($files as $file) {
-    $sanitized = ptcgdm_sanitize_deck_filename($file);
-    if ($sanitized) {
-      $existing[$sanitized] = true;
-    }
-  }
-  $changed = false;
-  foreach ($map as $file => $flag) {
-    if (!isset($existing[$file])) {
-      unset($map[$file]);
-      $changed = true;
-    }
-  }
-  if ($changed) {
-    update_option(PTCGDM_OPT_DECK_VISIBILITY, $map);
-  }
-}
-
-function ptcgdm_normalize_deck_subdir($value) {
-  $value = is_string($value) ? trim($value) : '';
-  $value = trim($value, "\\/\t\r\n\0\x0B");
-  if ($value === '') {
-    return PTCGDM_DEFAULT_DECK_SUBDIR;
-  }
-  $value = preg_replace('/[^a-zA-Z0-9_-]/', '-', $value);
-  $value = preg_replace('/-{2,}/', '-', $value);
-  $value = trim($value, '-_');
-  if ($value === '' || $value === '.' || $value === '..') {
-    return PTCGDM_DEFAULT_DECK_SUBDIR;
-  }
-  return $value;
-}
-
-function ptcgdm_get_deck_subdir() {
-  $saved = get_option(PTCGDM_OPT_DECK_SUBDIR, '');
-  return ptcgdm_normalize_deck_subdir($saved);
-}
-
-function ptcgdm_get_deck_dir() {
-  return PTCGDM_DIR . ptcgdm_get_deck_subdir();
-}
-
-function ptcgdm_get_deck_url() {
-  return PTCGDM_URL . ptcgdm_get_deck_subdir();
-}
-
 function ptcgdm_get_inventory_dir() {
   return PTCGDM_DIR . PTCGDM_INVENTORY_SUBDIR;
 }
 
 function ptcgdm_get_inventory_url() {
   return PTCGDM_URL . PTCGDM_INVENTORY_SUBDIR;
-}
-
-function ptcgdm_normalize_deck_review_base_url($value) {
-  $value = is_string($value) ? trim($value) : '';
-  if ($value === '') {
-    return '';
-  }
-  $sanitized = esc_url_raw($value);
-  if ($sanitized === '' || !filter_var($sanitized, FILTER_VALIDATE_URL)) {
-    return '';
-  }
-  return $sanitized;
-}
-
-function ptcgdm_get_deck_review_base_url() {
-  $saved = get_option(PTCGDM_OPT_DECK_REVIEW_BASE_URL, '');
-  $normalized = ptcgdm_normalize_deck_review_base_url($saved);
-  if ($normalized === '') {
-    return '';
-  }
-  return $normalized;
-}
-
-function ptcgdm_normalize_library_view_all_url($value) {
-  $value = is_string($value) ? trim($value) : '';
-  if ($value === '') {
-    return '';
-  }
-  $sanitized = esc_url_raw($value);
-  if ($sanitized === '' || !filter_var($sanitized, FILTER_VALIDATE_URL)) {
-    return '';
-  }
-  return $sanitized;
-}
-
-function ptcgdm_get_library_view_all_url() {
-  $saved = get_option(PTCGDM_OPT_LIBRARY_VIEW_ALL_URL, '');
-  $normalized = ptcgdm_normalize_library_view_all_url($saved);
-  if ($normalized === '') {
-    return '';
-  }
-  return $normalized;
-}
-
-function ptcgdm_ensure_deck_directory() {
-  $dir = ptcgdm_get_deck_dir();
-  if (!file_exists($dir)) {
-    wp_mkdir_p($dir);
-  }
-  return $dir;
 }
 
 function ptcgdm_ensure_inventory_directory() {
@@ -239,819 +46,25 @@ function ptcgdm_ensure_inventory_directory() {
   return $dir;
 }
 
-/** Activation: ensure data dir & default height */
 register_activation_hook(__FILE__, function () {
-  if (!file_exists(PTCGDM_DATA_DIR)) wp_mkdir_p(PTCGDM_DATA_DIR);
-  if (get_option(PTCGDM_OPT_DECK_SUBDIR, null) === null) {
-    add_option(PTCGDM_OPT_DECK_SUBDIR, PTCGDM_DEFAULT_DECK_SUBDIR);
+  if (!file_exists(PTCGDM_DATA_DIR)) {
+    wp_mkdir_p(PTCGDM_DATA_DIR);
   }
-  if (get_option(PTCGDM_OPT_DECK_VISIBILITY, null) === null) {
-    add_option(PTCGDM_OPT_DECK_VISIBILITY, []);
-  }
-  if (get_option(PTCGDM_OPT_LIBRARY_VIEW_ALL_URL, null) === null) {
-    add_option(PTCGDM_OPT_LIBRARY_VIEW_ALL_URL, '');
-  }
-  ptcgdm_ensure_deck_directory();
   ptcgdm_ensure_inventory_directory();
-  if (get_option(PTCGDM_OPT_HEIGHT) === false) add_option(PTCGDM_OPT_HEIGHT, '2200');
 });
 
-/** Menu: Settings + deck tools */
 add_action('admin_menu', function () {
-  add_menu_page('PTCG Deck', 'PTCG Deck', 'manage_options', 'ptcg-deck-manager', 'ptcgdm_render_admin', 'dashicons-grid-view', 58);
-  add_submenu_page('ptcg-deck-manager', 'Deck Library', 'Deck Library', 'manage_options', 'ptcg-deck-library', 'ptcgdm_render_library');
-  add_submenu_page('ptcg-deck-manager', 'Deck Builder', 'Deck Builder', 'manage_options', 'ptcg-deck-builder', 'ptcgdm_render_builder');
-  add_submenu_page('ptcg-deck-manager', 'Add Inventory', 'Add Inventory', 'manage_options', 'ptcg-add-inventory', 'ptcgdm_render_inventory');
+  add_menu_page(
+    'PTCG Inventory',
+    'Add Inventory',
+    'manage_options',
+    'ptcg-add-inventory',
+    'ptcgdm_render_inventory',
+    'dashicons-archive',
+    58
+  );
 });
 
-/** Shortcode: front-end showcase only */
-add_shortcode('ptcg_deck', function ($atts) {
-  $atts = shortcode_atts([
-    'height' => get_option(PTCGDM_OPT_HEIGHT, '2200'),
-    'deck'   => '' // optional deck JSON URL to auto-load
-  ], $atts, 'ptcg_deck');
-
-  $src = PTCGDM_URL . 'deck.html';
-  $deck_attr = isset($atts['deck']) ? trim((string) $atts['deck']) : '';
-  if ($deck_attr !== '') {
-    $deck_url = $deck_attr;
-    $has_scheme = (bool) preg_match('#^[a-z][a-z0-9+.-]*://#i', $deck_attr);
-    if (!$has_scheme && strpos($deck_attr, '//') === 0) {
-      $has_scheme = true;
-    }
-
-    if (!$has_scheme) {
-      $deck_file = basename($deck_attr);
-      if ($deck_file !== '') {
-        $deck_url = trailingslashit(ptcgdm_get_deck_url()) . rawurlencode($deck_file);
-      }
-    }
-
-    $src = add_query_arg(['deck_url' => esc_url_raw($deck_url)], $src);
-  }
-  $h = preg_replace('/[^0-9]/', '', $atts['height']);
-
-  ob_start(); ?>
-  <div class="ptcg-deck-embed" style="width:100%;">
-    <iframe src="<?php echo esc_url($src); ?>" style="width:100%; border:0; display:block;" loading="lazy" height="<?php echo esc_attr($h); ?>" referrerpolicy="no-referrer-when-downgrade" allow="clipboard-read; clipboard-write"></iframe>
-  </div>
-  <?php return ob_get_clean();
-});
-
-/** Shortcode: Deck library previews */
-add_shortcode('ptcg_deck_library', 'ptcgdm_shortcode_deck_library');
-add_shortcode('decklist_pre', 'ptcgdm_shortcode_decklist_pre');
-
-function ptcgdm_shortcode_deck_library($atts){
-  $atts = shortcode_atts([
-    'limit' => '0',
-    'view_all' => '',
-  ], $atts, 'ptcg_deck_library');
-
-  static $style_added = false, $script_added = false;
-  $style_markup = '';
-  if (!$style_added) {
-    $style_added = true;
-    $style_markup = '<style>
-    .ptcgdm-deck-library-wrapper{display:flex;flex-direction:column;gap:16px;}
-    .ptcgdm-deck-library-list{display:flex;flex-direction:column;gap:16px;margin:0;padding:0;list-style:none;font-family:"Inter",system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#f1f4ff;}
-    .ptcgdm-deck-row{display:flex;align-items:center;gap:24px;background:#111621;border:1px solid rgba(255,255,255,0.08);border-radius:12px;padding:18px 22px;box-shadow:0 18px 40px rgba(4,7,16,0.32);flex-wrap:wrap;}
-    .ptcgdm-deck-row.ptcgdm-hidden{display:none;}
-    .ptcgdm-deck-preview{display:flex;flex-direction:column;gap:12px;flex:1;min-width:220px;}
-    .ptcgdm-deck-header{display:flex;align-items:center;gap:12px;flex-wrap:wrap;width:100%;}
-    .ptcgdm-deck-name{margin:0;font-size:1.35rem;font-weight:700;line-height:1.2;display:flex;align-items:center;padding:0;color:#f1f4ff;gap:10px;max-width:100%;word-break:break-word;text-align:left;flex:1 1 auto;}
-    .ptcgdm-pokemon-list{display:flex;gap:12px;flex-wrap:wrap;margin:0;padding:0;list-style:none;}
-    .ptcgdm-pokemon-list li{margin:0;padding:0;}
-    .ptcgdm-card-thumb{position:relative;width:72px;height:100px;border-radius:10px;overflow:hidden;background:rgba(255,255,255,0.06);box-shadow:0 8px 18px rgba(4,7,16,0.4);}
-    .ptcgdm-card-thumb img{display:block;width:100%;height:100%;object-fit:cover;}
-    .ptcgdm-card-thumb .ptcgdm-card-qty{position:absolute;right:6px;bottom:6px;background:rgba(2,9,24,0.85);color:#fff;font-weight:600;font-size:0.8rem;line-height:1;padding:4px 8px;border-radius:999px;box-shadow:0 6px 14px rgba(2,9,24,0.35);}
-    .ptcgdm-card-thumb .ptcgdm-card-fallback{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;padding:8px;text-align:center;font-size:0.72rem;color:#d7def1;background:rgba(17,22,33,0.75);}
-    .ptcgdm-pokemon-empty{font-size:0.9rem;color:#a9b2c7;}
-    .ptcgdm-deck-actions{margin-left:auto;display:flex;gap:12px;}
-    .ptcgdm-deck-actions a{display:inline-flex;align-items:center;justify-content:center;padding:10px 18px;border-radius:10px;text-decoration:none;font-weight:600;font-size:0.92rem;background:linear-gradient(135deg,#2d6be8,#1a47c5);color:#fff;box-shadow:0 12px 24px rgba(33,98,229,0.35);text-align:center;white-space:normal;}
-    .ptcgdm-deck-actions a:hover{filter:brightness(1.08);}
-    .ptcgdm-library-footer{display:flex;justify-content:flex-end;}
-    .ptcgdm-view-all{display:inline-flex;align-items:center;justify-content:center;margin-top:4px;padding:10px 20px;border-radiu
-s:999px;text-decoration:none;font-weight:600;font-size:0.95rem;color:#fff;background:linear-gradient(135deg,#2d6be8,#1a47c5);box
--shadow:0 12px 24px rgba(33,98,229,0.35);}
-    .ptcgdm-view-all:hover{filter:brightness(1.08);}
-    .ptcgdm-deck-library-empty{font-family:"Inter",system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#d4d9e7;text-align:center;padding:24px;border:1px solid rgba(255,255,255,0.08);border-radius:12px;background:#111621;box-shadow:0 12px 24px rgba(4,7,16,0.28);}
-    .ptcgdm-pagination{display:flex;align-items:center;justify-content:center;gap:12px;margin-top:4px;flex-wrap:wrap;font-family:"Inter",system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;}
-    .ptcgdm-page-button{appearance:none;border:1px solid rgba(255,255,255,0.18);background:rgba(12,18,31,0.85);color:#f1f4ff;padding:8px 16px;border-radius:999px;font-weight:600;font-size:0.9rem;cursor:pointer;transition:filter 0.2s ease,background 0.2s ease;}
-    .ptcgdm-page-button:hover:not([disabled]){filter:brightness(1.1);background:rgba(33,98,229,0.38);}
-    .ptcgdm-page-button[disabled]{opacity:0.45;cursor:not-allowed;}
-    .ptcgdm-page-status{font-size:0.92rem;color:#a9b2c7;font-weight:500;}
-    @media (max-width:720px){.ptcgdm-deck-row{flex-direction:column;align-items:flex-start;}.ptcgdm-deck-actions{margin-left:0;}}
-    </style>';
-  }
-
-  $script_markup = '';
-  if (!$script_added) {
-    $script_added = true;
-    $script_markup = <<<'JS'
-<script>
-(function(){
-  function init(container) {
-    var pageSize = parseInt(container.getAttribute('data-page-size'), 10) || 20;
-    var rows = Array.prototype.slice.call(container.querySelectorAll('.ptcgdm-deck-row'));
-    if (!rows.length) {
-      return;
-    }
-
-    var pagination = container.querySelector('.ptcgdm-pagination');
-    if (!pagination || rows.length <= pageSize) {
-      rows.forEach(function(row, idx) {
-        if (idx < pageSize) {
-          row.classList.remove('ptcgdm-hidden');
-        } else {
-          row.classList.add('ptcgdm-hidden');
-        }
-      });
-      if (pagination) {
-        pagination.style.display = rows.length > pageSize ? 'flex' : 'none';
-      }
-      return;
-    }
-
-    var prev = pagination.querySelector('[data-page-action="prev"]');
-    var next = pagination.querySelector('[data-page-action="next"]');
-    var currentEl = pagination.querySelector('.ptcgdm-current-page');
-    var totalEl = pagination.querySelector('.ptcgdm-total-pages');
-    var totalPages = Math.max(1, Math.ceil(rows.length / pageSize));
-    if (totalEl) {
-      totalEl.textContent = totalPages;
-    }
-
-    var currentPage = 1;
-
-    function render() {
-      rows.forEach(function(row, idx) {
-        var page = Math.floor(idx / pageSize) + 1;
-        if (page === currentPage) {
-          row.classList.remove('ptcgdm-hidden');
-        } else {
-          row.classList.add('ptcgdm-hidden');
-        }
-      });
-      if (currentEl) {
-        currentEl.textContent = currentPage;
-      }
-      if (prev) {
-        prev.disabled = currentPage <= 1;
-      }
-      if (next) {
-        next.disabled = currentPage >= totalPages;
-      }
-      pagination.style.display = totalPages > 1 ? 'flex' : 'none';
-    }
-
-    render();
-
-    if (prev) {
-      prev.addEventListener('click', function() {
-        if (currentPage > 1) {
-          currentPage -= 1;
-          render();
-        }
-      });
-    }
-
-    if (next) {
-      next.addEventListener('click', function() {
-        if (currentPage < totalPages) {
-          currentPage += 1;
-          render();
-        }
-      });
-    }
-  }
-
-  function ready(fn) {
-    if (document.readyState !== 'loading') {
-      fn();
-    } else {
-      document.addEventListener('DOMContentLoaded', fn);
-    }
-  }
-
-  ready(function() {
-    document.querySelectorAll('.ptcgdm-deck-library-wrapper').forEach(init);
-  });
-})();
-</script>
-JS;
-  }
-
-  $dir = trailingslashit(ptcgdm_get_deck_dir());
-  if (!file_exists($dir)) {
-    return $style_markup . $script_markup . '<div class="ptcgdm-deck-library-empty">No decks found.</div>';
-  }
-
-  $files = glob($dir . '*.json');
-  if (empty($files)) {
-    return $style_markup . $script_markup . '<div class="ptcgdm-deck-library-empty">No decks found.</div>';
-  }
-
-  usort($files, function($a, $b){
-    return (@filemtime($b) ?: 0) <=> (@filemtime($a) ?: 0);
-  });
-
-  $limit = intval($atts['limit']);
-
-  $view_all_candidate = isset($atts['view_all']) ? trim((string) $atts['view_all']) : '';
-  $view_all_url = '';
-  if ($view_all_candidate !== '') {
-    $normalized_view_all = esc_url_raw($view_all_candidate);
-    if ($normalized_view_all !== '' && filter_var($normalized_view_all, FILTER_VALIDATE_URL)) {
-      $view_all_url = $normalized_view_all;
-    }
-  }
-
-  $deck_url_base = PTCGDM_URL . 'deck.html';
-  $custom_view_base = ptcgdm_get_deck_review_base_url();
-  $output = [];
-  if ($style_markup !== '') {
-    $output[] = $style_markup;
-  }
-  if ($script_markup !== '') {
-    $output[] = $script_markup;
-  }
-
-  $items = [];
-  $page_size = 20;
-  $added = 0;
-
-  foreach ($files as $file) {
-    if ($limit > 0 && $added >= $limit) {
-      break;
-    }
-    $filename = ptcgdm_sanitize_deck_filename($file);
-    if (!$filename) {
-      continue;
-    }
-    if (!ptcgdm_is_deck_visible($filename)) {
-      continue;
-    }
-    $json = @file_get_contents($file);
-    if (!$json) continue;
-
-    $data = json_decode($json, true);
-    if (!is_array($data)) continue;
-
-    $cards = isset($data['cards']) && is_array($data['cards']) ? $data['cards'] : [];
-    if (empty($cards)) continue;
-
-    $title = is_string($data['name'] ?? '') ? trim($data['name']) : '';
-    $format = is_string($data['format'] ?? '') ? trim($data['format']) : '';
-    $display_title = $title ?: $filename;
-    $pokemon_cards = [];
-    $pokemon_index = [];
-
-    foreach ($cards as $card) {
-      if (!is_array($card)) continue;
-      $card_id = isset($card['id']) ? trim((string) $card['id']) : '';
-      $qty = isset($card['qty']) ? intval($card['qty']) : 0;
-      if (!$card_id || $qty <= 0) continue;
-
-      $preview = ptcgdm_lookup_card_preview($card_id);
-      $image = '';
-      if (!empty($preview['image']) && is_string($preview['image']) && filter_var($preview['image'], FILTER_VALIDATE_URL)) {
-        $image = $preview['image'];
-      }
-      $supertype = '';
-      if (!empty($preview['supertype']) && is_string($preview['supertype'])) {
-        $supertype = $preview['supertype'];
-      }
-      $normalized_supertype = $supertype;
-      if ($normalized_supertype !== '') {
-        if (function_exists('remove_accents')) {
-          $normalized_supertype = remove_accents($normalized_supertype);
-        }
-        $normalized_supertype = strtolower(trim($normalized_supertype));
-      }
-
-      if ($normalized_supertype === 'pokemon') {
-        $name = !empty($preview['name']) && is_string($preview['name']) ? $preview['name'] : $card_id;
-        $safe_qty = max(1, $qty);
-        if (isset($pokemon_index[$card_id])) {
-          $idx = $pokemon_index[$card_id];
-          $pokemon_cards[$idx]['qty'] += $safe_qty;
-          if ($image && empty($pokemon_cards[$idx]['image'])) {
-            $pokemon_cards[$idx]['image'] = $image;
-          }
-        } else {
-          $pokemon_index[$card_id] = count($pokemon_cards);
-          $pokemon_cards[] = [
-            'id'   => $card_id,
-            'name' => $name,
-            'qty'  => $safe_qty,
-            'image'=> $image,
-          ];
-        }
-      }
-    }
-
-    $deck_url = trailingslashit(ptcgdm_get_deck_url()) . rawurlencode($filename);
-    if ($custom_view_base !== '') {
-      $view_url = add_query_arg('view', $filename, $custom_view_base);
-    } else {
-      $view_url = add_query_arg('deck_url', $deck_url, $deck_url_base);
-    }
-
-    if ($pokemon_cards) {
-      $list_items = [];
-      foreach ($pokemon_cards as $entry) {
-        $card_name = $entry['name'] ?: $entry['id'];
-        $qty = max(1, intval($entry['qty']));
-        $thumb_content = '';
-        if (!empty($entry['image']) && filter_var($entry['image'], FILTER_VALIDATE_URL)) {
-          $thumb_content = '<img src="' . esc_url($entry['image']) . '" alt="' . esc_attr($card_name) . '" loading="lazy">';
-        } else {
-          $thumb_content = '<div class="ptcgdm-card-fallback">' . esc_html($card_name) . '</div>';
-        }
-        $list_items[] = '<li><div class="ptcgdm-card-thumb">' . $thumb_content . '<span class="ptcgdm-card-qty">×' . esc_html((string) $qty) . '</span></div></li>';
-      }
-      $pokemon_markup = '<ul class="ptcgdm-pokemon-list">' . implode('', $list_items) . '</ul>';
-    } else {
-      $pokemon_markup = '<div class="ptcgdm-pokemon-empty">No Pokémon cards found.</div>';
-    }
-
-    $view_label = 'View Deck Detail';
-
-    $row_classes = 'ptcgdm-deck-row';
-    $index = count($items);
-    if ($index >= $page_size) {
-      $row_classes .= ' ptcgdm-hidden';
-    }
-    $page_number = (int) floor($index / $page_size) + 1;
-
-    $items[] = '<li class="' . $row_classes . '" data-page="' . $page_number . '">'
-      . '<div class="ptcgdm-deck-preview">'
-      . '<div class="ptcgdm-deck-header"><h3 class="ptcgdm-deck-name">' . esc_html($display_title) . '</h3></div>'
-      . $pokemon_markup
-      . '</div>'
-      . '<div class="ptcgdm-deck-actions">'
-      . '<a class="ptcgdm-view" href="' . esc_url($view_url) . '" target="_blank" rel="noopener" title="' . esc_attr($view_label) . '" aria-label="' . esc_attr($view_label) . '">' . esc_html($view_label) . '</a>'
-      . '</div>'
-      . '</li>';
-    $added++;
-  }
-
-  if (empty($items)) {
-    return implode('', $output) . '<div class="ptcgdm-deck-library-empty">No decks found.</div>';
-  }
-
-  $total_items = count($items);
-  $total_pages = (int) ceil($total_items / $page_size);
-  $pagination_html = '';
-  if ($total_pages > 1) {
-    $pagination_html = '<div class="ptcgdm-pagination" role="navigation" aria-label="Deck pages">'
-      . '<button type="button" class="ptcgdm-page-button" data-page-action="prev" disabled>Previous</button>'
-      . '<div class="ptcgdm-page-status"><span class="ptcgdm-current-page">1</span> / <span class="ptcgdm-total-pages">' . $total_pages . '</span></div>'
-      . '<button type="button" class="ptcgdm-page-button" data-page-action="next">Next</button>'
-      . '</div>';
-  }
-
-  $footer_html = '';
-  if ($view_all_url !== '') {
-    $footer_html = '<div class="ptcgdm-library-footer"><a class="ptcgdm-view-all" href="' . esc_url($view_all_url) . '" target="_blank" rel="noopener">View All</a></div>';
-  }
-
-  $output[] = '<div class="ptcgdm-deck-library-wrapper" data-page-size="' . $page_size . '">' . '<ul class="ptcgdm-deck-library-list">' . implode('', $items) . '</ul>' . $footer_html . $pagination_html . '</div>';
-
-  return implode('', $output);
-}
-
-function ptcgdm_shortcode_decklist_pre($atts) {
-  $view_all_url = ptcgdm_get_library_view_all_url();
-  $forward_atts = ['limit' => '5'];
-  if ($view_all_url !== '') {
-    $forward_atts['view_all'] = $view_all_url;
-  }
-  return ptcgdm_shortcode_deck_library($forward_atts);
-}
-
-/** Settings + dataset upload */
-function ptcgdm_render_admin() {
-  if (!current_user_can('manage_options')) return;
-  $msg = '';
-
-  // Save height
-  if (isset($_POST['ptcgdm_save']) && check_admin_referer('ptcgdm_save_opts')) {
-    $h = isset($_POST['ptcgdm_height']) ? trim($_POST['ptcgdm_height']) : '2200';
-    $h = preg_replace('/[^0-9]/', '', $h);
-    update_option(PTCGDM_OPT_HEIGHT, $h ?: '2200');
-    $deck_subdir_raw = isset($_POST['ptcgdm_deck_subdir']) ? wp_unslash($_POST['ptcgdm_deck_subdir']) : '';
-    $deck_subdir = ptcgdm_normalize_deck_subdir($deck_subdir_raw);
-    update_option(PTCGDM_OPT_DECK_SUBDIR, $deck_subdir);
-    ptcgdm_ensure_deck_directory();
-    $view_all_raw = isset($_POST['ptcgdm_library_view_all_url']) ? trim((string) wp_unslash($_POST['ptcgdm_library_view_all_url'])) : '';
-    $view_all_clean = ptcgdm_normalize_library_view_all_url($view_all_raw);
-    update_option(PTCGDM_OPT_LIBRARY_VIEW_ALL_URL, $view_all_clean);
-    if ($view_all_raw !== '' && $view_all_clean === '') {
-      $msg = 'Settings saved. The Deck list "View All" URL must include http:// or https:// and has been cleared.';
-    } else {
-      $msg = 'Settings saved.';
-    }
-  }
-
-  // Upload ZIP of dataset
-  if (isset($_POST['ptcgdm_upload']) && check_admin_referer('ptcgdm_upload_zip')) {
-    if (!empty($_FILES['ptcgdm_zip']['name'])) {
-      $file = $_FILES['ptcgdm_zip'];
-      if ($file['error'] === UPLOAD_ERR_OK) {
-        require_once ABSPATH . 'wp-admin/includes/file.php';
-        $uploaded = wp_handle_upload($file, ['test_form' => false, 'mimes' => ['zip' => 'application/zip']]);
-        if (empty($uploaded['error'])) {
-          $zip = $uploaded['file'];
-          $tmp = trailingslashit(WP_CONTENT_DIR) . 'uploads/ptcg-deck-tmp-' . wp_generate_password(6, false);
-          wp_mkdir_p($tmp);
-          require_once ABSPATH . 'wp-admin/includes/file.php';
-          require_once ABSPATH . 'wp-admin/includes/class-wp-upgrader.php';
-          $unz = unzip_file($zip, $tmp);
-          if (is_wp_error($unz)) {
-            $msg = 'Unzip failed: ' . esc_html($unz->get_error_message());
-          } else {
-            $root = ptcgdm_find_cards_root($tmp);
-            if ($root) {
-              if (!file_exists(PTCGDM_DATA_DIR)) wp_mkdir_p(PTCGDM_DATA_DIR);
-              ptcgdm_rrmdir(PTCGDM_DATA_DIR);
-              wp_mkdir_p(PTCGDM_DATA_DIR);
-              ptcgdm_rcopy($root, PTCGDM_DATA_DIR);
-              $msg = 'Dataset uploaded successfully.';
-            } else {
-              $msg = 'Could not find "cards/en" in the ZIP. Expect pokemon-tcg-data/cards/en/*.json';
-            }
-          }
-          ptcgdm_rrmdir($tmp);
-          @unlink($zip);
-        } else {
-          $msg = 'Upload error: ' . esc_html($uploaded['error']);
-        }
-      } else {
-        $msg = 'Upload error code: ' . intval($file['error']);
-      }
-    } else {
-      $msg = 'Please choose a .zip file.';
-    }
-  }
-
-  $count = 0;
-  if (file_exists(PTCGDM_DATA_DIR . '/cards/en')) {
-    $files = glob(PTCGDM_DATA_DIR . '/cards/en/*.json'); $count = $files ? count($files) : 0;
-  }
-  $height = esc_attr(get_option(PTCGDM_OPT_HEIGHT, '2200'));
-  $deck_subdir = esc_attr(ptcgdm_get_deck_subdir());
-  $deck_storage_path = trailingslashit(ptcgdm_get_deck_dir());
-  $deck_storage_url = trailingslashit(ptcgdm_get_deck_url());
-  $deck_library_view_all = esc_attr(ptcgdm_get_library_view_all_url());
-  $deck_url = esc_url(PTCGDM_URL . 'deck.html'); ?>
-
-  <div class="wrap">
-    <h1>PTCG Deck – Settings</h1>
-    <?php if ($msg): ?><div class="notice notice-success"><p><?php echo esc_html($msg); ?></p></div><?php endif; ?>
-
-    <h2 class="title">Embed</h2>
-    <form method="post">
-      <?php wp_nonce_field('ptcgdm_save_opts'); ?>
-      <table class="form-table" role="presentation">
-        <tr>
-          <th scope="row">Iframe height (px)</th>
-          <td>
-            <input type="number" name="ptcgdm_height" value="<?php echo $height; ?>" min="600" step="50">
-            <p class="description">Used by <code>[ptcg_deck]</code>. Optional <code>deck="URL"</code> autoloads a deck.</p>
-          </td>
-        </tr>
-        <tr>
-          <th scope="row">Deck storage folder</th>
-          <td>
-            <input type="text" name="ptcgdm_deck_subdir" value="<?php echo $deck_subdir; ?>" pattern="[A-Za-z0-9_-]+">
-            <p class="description">Letters, numbers, hyphen, and underscore only.</p>
-            <p class="description">Relative to this plugin: <code><?php echo esc_html(PTCGDM_DIR); ?></code></p>
-            <p class="description">Current path: <code><?php echo esc_html($deck_storage_path); ?></code></p>
-            <p class="description">Public URL base: <code><?php echo esc_html($deck_storage_url); ?></code></p>
-          </td>
-        </tr>
-        <tr>
-          <th scope="row">Deck list "View All" URL</th>
-          <td>
-            <input type="url" name="ptcgdm_library_view_all_url" value="<?php echo $deck_library_view_all; ?>" placeholder="https://example.com/decks">
-            <p class="description">Used by the <code>[decklist_pre]</code> shortcode&rsquo;s View All button. Leave blank to hide the button.</p>
-          </td>
-        </tr>
-      </table>
-      <p><button class="button button-primary" type="submit" name="ptcgdm_save" value="1">Save Settings</button></p>
-    </form>
-
-    <h2 class="title">Dataset</h2>
-    <p>Location: <code><?php echo esc_html(PTCGDM_DATA_DIR); ?></code></p>
-    <p>Found <strong><?php echo intval($count); ?></strong> JSON files in <code>cards/en</code>.</p>
-    <form method="post" enctype="multipart/form-data">
-      <?php wp_nonce_field('ptcgdm_upload_zip'); ?>
-      <table class="form-table" role="presentation">
-        <tr>
-          <th scope="row">Upload ZIP</th>
-          <td>
-            <input type="file" name="ptcgdm_zip" accept=".zip">
-            <p class="description">ZIP must contain <code>pokemon-tcg-data/cards/en/*.json</code>. Replaces the plugin’s dataset.</p>
-          </td>
-        </tr>
-      </table>
-      <p><button class="button button-secondary" type="submit" name="ptcgdm_upload" value="1">Upload & Replace Dataset</button></p>
-    </form>
-
-    <h2 class="title">Diagnostics</h2>
-    <ul>
-      <li>Front deck page: <a href="<?php echo $deck_url; ?>" target="_blank" rel="noopener">open deck.html</a></li>
-    </ul>
-  </div>
-<?php }
-
-/** Admin: Deck Library */
-function ptcgdm_render_library(){
-  if (!current_user_can('manage_options')) return;
-
-  $dir = trailingslashit(ptcgdm_get_deck_dir());
-  if (!file_exists($dir)) wp_mkdir_p($dir);
-
-  $notice_message = '';
-  $notice_error   = false;
-  $custom_review_url_saved  = ptcgdm_get_deck_review_base_url();
-  $custom_review_url_field  = $custom_review_url_saved;
-
-  $action = isset($_POST['ptcgdm_action']) ? trim((string) wp_unslash($_POST['ptcgdm_action'])) : '';
-
-  if ($action === 'save_review_url') {
-    if (check_admin_referer('ptcgdm_save_review_url')) {
-      $raw_url = isset($_POST['ptcgdm_review_url']) ? trim((string) wp_unslash($_POST['ptcgdm_review_url'])) : '';
-      if ($raw_url === '') {
-        update_option(PTCGDM_OPT_DECK_REVIEW_BASE_URL, '');
-        $custom_review_url_saved = '';
-        $custom_review_url_field = '';
-        $notice_message = 'Deck review URL cleared. View buttons will use the default embed.';
-      } else {
-        $normalized = ptcgdm_normalize_deck_review_base_url($raw_url);
-        if ($normalized === '') {
-          $notice_message = 'Please provide a valid URL (including the https:// scheme).';
-          $notice_error   = true;
-          $custom_review_url_field = $raw_url;
-        } else {
-          update_option(PTCGDM_OPT_DECK_REVIEW_BASE_URL, $normalized);
-          $custom_review_url_saved = $normalized;
-          $custom_review_url_field = $normalized;
-          $notice_message = 'Deck review URL saved.';
-        }
-      }
-    }
-  } elseif ($action === 'delete') {
-    if (check_admin_referer('ptcgdm_delete_deck')) {
-      $raw      = isset($_POST['ptcgdm_file']) ? wp_unslash($_POST['ptcgdm_file']) : '';
-      $filename = ptcgdm_sanitize_deck_filename($raw);
-      if (!$filename) {
-        $notice_message = 'Invalid deck specified.';
-        $notice_error   = true;
-      } else {
-        $path = $dir . $filename;
-        if (file_exists($path)) {
-          if (@unlink($path)) {
-            ptcgdm_remove_deck_visibility($filename);
-            $notice_message = sprintf('Deleted deck "%s".', $filename);
-          } else {
-            $notice_message = 'Could not delete the selected deck.';
-            $notice_error   = true;
-          }
-        } else {
-          $notice_message = 'Deck file not found.';
-          $notice_error   = true;
-        }
-      }
-    }
-  } elseif ($action === 'toggle_visibility') {
-    if (check_admin_referer('ptcgdm_toggle_visibility')) {
-      $raw      = isset($_POST['ptcgdm_file']) ? wp_unslash($_POST['ptcgdm_file']) : '';
-      $filename = ptcgdm_sanitize_deck_filename($raw);
-      if (!$filename) {
-        $notice_message = 'Invalid deck specified.';
-        $notice_error   = true;
-      } else {
-        $visible = isset($_POST['ptcgdm_visible']) && $_POST['ptcgdm_visible'] ? true : false;
-        ptcgdm_set_deck_visibility($filename, $visible);
-        $notice_message = $visible
-          ? sprintf('Deck "%s" will appear in the deck preview.', $filename)
-          : sprintf('Deck "%s" is hidden from the deck preview.', $filename);
-      }
-    }
-  }
-
-  $files = glob($dir . '*.json');
-  if ($files) {
-    ptcgdm_prune_visibility_map($files);
-  }
-  $decks = [];
-  if ($files) {
-    foreach ($files as $file) {
-      $filename = ptcgdm_sanitize_deck_filename($file);
-      if (!$filename) {
-        continue;
-      }
-      $content  = @file_get_contents($file);
-      $data     = $content ? json_decode($content, true) : null;
-      $title    = '';
-      $format   = '';
-      if (is_array($data)) {
-        if (!empty($data['name']) && is_string($data['name'])) {
-          $title = $data['name'];
-        }
-        if (!empty($data['format']) && is_string($data['format'])) {
-          $format = $data['format'];
-        }
-      }
-      $decks[] = [
-        'filename' => $filename,
-        'title'    => $title,
-        'format'   => $format,
-        'mtime'    => @filemtime($file) ?: 0,
-        'size'     => @filesize($file) ?: 0,
-        'visible'  => ptcgdm_is_deck_visible($filename),
-      ];
-    }
-    usort($decks, function($a, $b){ return $b['mtime'] <=> $a['mtime']; });
-  }
-
-  $builder_url = admin_url('admin.php?page=ptcg-deck-builder');
-  ?>
-  <div class="wrap">
-    <h1>PTCG Deck – Deck Library</h1>
-    <p class="description">Decks saved from the builder are stored in <code><?php echo esc_html(trailingslashit(ptcgdm_get_deck_dir())); ?></code>.</p>
-    <p><a class="button button-primary" href="<?php echo esc_url($builder_url); ?>">Open Deck Builder</a></p>
-
-    <form method="post" style="max-width:620px;margin-top:20px;">
-      <?php wp_nonce_field('ptcgdm_save_review_url'); ?>
-      <input type="hidden" name="ptcgdm_action" value="save_review_url">
-      <table class="form-table" role="presentation">
-        <tr>
-          <th scope="row"><label for="ptcgdm_review_url">Deck detail page URL</label></th>
-          <td>
-            <input type="url" class="regular-text" id="ptcgdm_review_url" name="ptcgdm_review_url" value="<?php echo esc_attr($custom_review_url_field); ?>" placeholder="https://example.com/deck-review">
-            <p class="description">Used by the Deck Library shortcode&rsquo;s View Deck button. Leave blank to use the default deck.html embed.</p>
-            <?php if ($custom_review_url_saved) : ?>
-              <p class="description">Example link: <code><?php echo esc_html(add_query_arg('view', 'deck-name.json', $custom_review_url_saved)); ?></code></p>
-            <?php endif; ?>
-          </td>
-        </tr>
-      </table>
-      <p><button type="submit" class="button button-secondary">Save Deck Detail URL</button></p>
-    </form>
-
-    <?php if ($notice_message) : ?>
-      <div class="notice <?php echo $notice_error ? 'notice-error' : 'notice-success'; ?> is-dismissible"><p><?php echo esc_html($notice_message); ?></p></div>
-    <?php endif; ?>
-
-    <?php if (empty($decks)) : ?>
-      <p>No decks saved yet. Use the builder to create and save a deck.</p>
-    <?php else : ?>
-      <div id="ptcgdm-copy-notice" style="display:none;" class="notice notice-success is-dismissible"><p>Shortcode copied.</p></div>
-
-      <?php
-      static $ptcgdm_toggle_styles_output = false;
-      if (!$ptcgdm_toggle_styles_output) {
-        $ptcgdm_toggle_styles_output = true;
-        ?>
-        <style>
-          .ptcgdm-toggle-form{display:flex;align-items:center;gap:8px;}
-          .ptcgdm-toggle-switch{position:relative;display:inline-block;width:46px;height:24px;}
-          .ptcgdm-toggle-switch input{opacity:0;width:0;height:0;}
-          .ptcgdm-toggle-slider{position:absolute;cursor:pointer;top:0;left:0;right:0;bottom:0;background:#c7ccd6;border-radius:999px;transition:background 0.2s ease;}
-          .ptcgdm-toggle-slider:before{position:absolute;content:'';height:18px;width:18px;left:3px;bottom:3px;background:#fff;border-radius:50%;transition:transform 0.2s ease;box-shadow:0 1px 2px rgba(0,0,0,0.2);}
-          .ptcgdm-toggle-switch input:checked + .ptcgdm-toggle-slider{background:#2d6be8;}
-          .ptcgdm-toggle-switch input:checked + .ptcgdm-toggle-slider:before{transform:translateX(22px);}
-          .ptcgdm-toggle-status{font-weight:600;color:#1d2327;}
-          .rtl .ptcgdm-toggle-switch input:checked + .ptcgdm-toggle-slider:before{transform:translateX(-22px);}
-        </style>
-        <?php
-      }
-      ?>
-
-      <table class="widefat fixed striped">
-        <thead>
-          <tr>
-            <th scope="col">Deck</th>
-            <th scope="col">File</th>
-            <th scope="col">Shortcode</th>
-            <th scope="col">Last Modified</th>
-            <th scope="col">Size</th>
-            <th scope="col">Preview</th>
-            <th scope="col">Actions</th>
-          </tr>
-        </thead>
-        <tbody>
-          <?php foreach ($decks as $deck) :
-            $url = trailingslashit(ptcgdm_get_deck_url()) . rawurlencode($deck['filename']);
-            $time = $deck['mtime'] ? human_time_diff($deck['mtime'], current_time('timestamp')) . ' ago' : '—';
-            $stamp = $deck['mtime'] ? date_i18n(get_option('date_format') . ' ' . get_option('time_format'), $deck['mtime']) : '';
-          ?>
-            <tr>
-              <td>
-                <strong><?php echo esc_html($deck['title'] ?: '(Untitled deck)'); ?></strong>
-              </td>
-              <td>
-                <a href="<?php echo esc_url($url); ?>" target="_blank" rel="noopener"><?php echo esc_html($deck['filename']); ?></a>
-              </td>
-              <td>
-                <?php $shortcode = sprintf('[ptcg_deck deck="%s"]', $deck['filename']); ?>
-                <button type="button" class="button button-secondary ptcgdm-copy-shortcode" data-shortcode="<?php echo esc_attr($shortcode); ?>">Copy Shortcode</button>
-              </td>
-              <td>
-                <?php if ($deck['mtime']) : ?>
-                  <span title="<?php echo esc_attr($stamp); ?>"><?php echo esc_html($time); ?></span>
-                <?php else : ?>
-                  —
-                <?php endif; ?>
-              </td>
-              <td><?php echo esc_html(size_format($deck['size'])); ?></td>
-              <td>
-                <form method="post" class="ptcgdm-toggle-form">
-                  <?php wp_nonce_field('ptcgdm_toggle_visibility'); ?>
-                  <input type="hidden" name="ptcgdm_action" value="toggle_visibility">
-                  <input type="hidden" name="ptcgdm_file" value="<?php echo esc_attr($deck['filename']); ?>">
-                  <label class="ptcgdm-toggle-switch">
-                    <input type="checkbox" name="ptcgdm_visible" value="1" <?php checked($deck['visible']); ?> onchange="this.form.submit();" aria-label="Toggle deck visibility in deck preview">
-                    <span class="ptcgdm-toggle-slider" aria-hidden="true"></span>
-                  </label>
-                  <span class="ptcgdm-toggle-status"><?php echo $deck['visible'] ? 'Shown' : 'Hidden'; ?></span>
-                  <noscript><button type="submit" class="button button-secondary">Update</button></noscript>
-                </form>
-              </td>
-              <td>
-                <form method="post" style="display:inline;" onsubmit="return confirm('Delete this deck permanently?');">
-                  <?php wp_nonce_field('ptcgdm_delete_deck'); ?>
-                  <input type="hidden" name="ptcgdm_action" value="delete">
-                  <input type="hidden" name="ptcgdm_file" value="<?php echo esc_attr($deck['filename']); ?>">
-                  <button type="submit" class="button button-link-delete">Delete</button>
-                </form>
-              </td>
-            </tr>
-          <?php endforeach; ?>
-        </tbody>
-      </table>
-      <script>
-      (function(){
-        const notice = document.getElementById('ptcgdm-copy-notice');
-        function showNotice(message, success=true){
-          if(!notice) return;
-          const text = notice.querySelector('p');
-          if(text) text.textContent = message;
-          notice.classList.remove('notice-success','notice-error');
-          notice.classList.add(success ? 'notice-success' : 'notice-error');
-          notice.style.display = '';
-          setTimeout(()=>{ notice.style.display = 'none'; }, 4000);
-        }
-        function fallbackCopy(text){
-          const ta = document.createElement('textarea');
-          ta.value = text;
-          ta.setAttribute('readonly','');
-          ta.style.position = 'absolute';
-          ta.style.left = '-9999px';
-          document.body.appendChild(ta);
-          const selected = document.getSelection().rangeCount > 0 ? document.getSelection().getRangeAt(0) : null;
-          ta.select();
-          try {
-            const copied = document.execCommand('copy');
-            showNotice(copied ? 'Shortcode copied.' : 'Copy failed.', copied);
-          } catch (err) {
-            showNotice('Copy failed.', false);
-          }
-          document.body.removeChild(ta);
-          if (selected) {
-            const selection = document.getSelection();
-            selection.removeAllRanges();
-            selection.addRange(selected);
-          }
-        }
-        document.addEventListener('click', function(event){
-          const btn = event.target.closest('.ptcgdm-copy-shortcode');
-          if(!btn) return;
-          event.preventDefault();
-          const shortcode = btn.dataset.shortcode || '';
-          if(!shortcode) return;
-          if (navigator.clipboard && navigator.clipboard.writeText) {
-            navigator.clipboard.writeText(shortcode).then(()=>{
-              showNotice('Shortcode copied.');
-            }).catch(()=>{
-              fallbackCopy(shortcode);
-            });
-          } else {
-            fallbackCopy(shortcode);
-          }
-        });
-      })();
-      </script>
-    <?php endif; ?>
-  </div>
-  <?php
-}
-
-/** Admin: Native Deck Builder */
 function ptcgdm_collect_saved_entries($dir, $url_base, array $args = []) {
   $args = wp_parse_args($args, [
     'pattern'   => '*.json',
@@ -1070,7 +83,7 @@ function ptcgdm_collect_saved_entries($dir, $url_base, array $args = []) {
 
   if (!empty($args['filenames'])) {
     foreach ($args['filenames'] as $filename) {
-      $sanitized = ptcgdm_sanitize_deck_filename($filename);
+      $sanitized = ptcgdm_sanitize_json_filename($filename);
       if (!$sanitized) {
         continue;
       }
@@ -1124,71 +137,42 @@ function ptcgdm_collect_saved_entries($dir, $url_base, array $args = []) {
   return $saved;
 }
 
-function ptcgdm_render_builder($mode = 'deck'){
+function ptcgdm_render_builder(){
   if (!current_user_can('manage_options')) return;
 
-  $mode = ($mode === 'inventory') ? 'inventory' : 'deck';
+  $mode = 'inventory';
 
-  if ($mode === 'inventory') {
-    $dir = ptcgdm_ensure_inventory_directory();
-    $url_base = ptcgdm_get_inventory_url();
-    $page_title = 'PTCG Deck – Card Inventory';
-    $page_description = 'Maintain a single card inventory list using the local dataset.';
-    $load_label = 'Load Saved Inventory';
-    $select_placeholder = 'Choose saved inventory…';
-    $load_button_label = 'Load Inventory';
-    $save_button_label = 'Add to Inventory';
-    $clear_button_label = 'Clear Buffer';
-    $section_heading = 'Buffer';
-    $saved_inventory_heading = 'Saved Inventory';
-    $load_message_empty = 'No inventory saved yet. Save to create the inventory file.';
-    $load_message_ready = 'Inventory found. Loading automatically…';
-    $save_action = 'ptcgdm_save_inventory';
-    $nonce_action = 'ptcgdm_save_inventory';
-    $filename_pattern = '%s.json';
-    $fixed_filename = PTCGDM_INVENTORY_FILENAME;
-    $default_basename = 'card-inventory';
-    $force_option_label = 'Card Inventory';
-    $fallback_entity_label = 'inventory';
-    $loading_message = 'Loading inventory…';
-    $save_success_message = "Inventory updated!\nURL:\n";
-    $default_entry_name = 'Untitled Inventory';
-    $saved_args = [
-      'filenames' => [PTCGDM_INVENTORY_FILENAME],
-      'label_map' => [PTCGDM_INVENTORY_FILENAME => 'Card Inventory'],
-    ];
-    $inventory_path = trailingslashit($dir) . PTCGDM_INVENTORY_FILENAME;
-    $auto_load_url = '';
-    if (file_exists($inventory_path)) {
-      $auto_load_url = trailingslashit($url_base) . rawurlencode(PTCGDM_INVENTORY_FILENAME);
-    }
-  } else {
-    $dir = ptcgdm_ensure_deck_directory();
-    $url_base = ptcgdm_get_deck_url();
-    $page_title = 'PTCG Deck – Builder';
-    $page_description = 'Build a deck using the local dataset, then save it to the Deck Library tab or download the JSON.';
-    $load_label = 'Load Saved Deck';
-    $select_placeholder = 'Choose saved deck…';
-    $load_button_label = 'Load Deck';
-    $save_button_label = 'Save Deck';
-    $clear_button_label = 'Clear Deck';
-    $section_heading = 'Deck';
-    $load_message_empty = 'No saved decks found yet. Save a deck to load it here.';
-    $load_message_ready = 'Select a saved deck to load it for editing.';
-    $save_action = 'ptcgdm_save_deck';
-    $nonce_action = 'ptcgdm_save_deck';
-    $filename_pattern = '%s.json';
-    $fixed_filename = '';
-    $default_basename = 'deck';
-    $force_option_label = '';
-    $fallback_entity_label = 'deck';
-    $loading_message = 'Loading deck…';
-    $save_success_message = "Saved! View it under Deck Library.\nURL:\n";
-    $default_entry_name = 'Untitled Deck';
-    $saved_args = [
-      'pattern' => '*.json',
-    ];
-    $auto_load_url = '';
+  $dir = ptcgdm_ensure_inventory_directory();
+  $url_base = ptcgdm_get_inventory_url();
+  $page_title = 'PTCG Deck – Card Inventory';
+  $page_description = 'Maintain a single card inventory list using the local dataset.';
+  $load_label = 'Load Saved Inventory';
+  $select_placeholder = 'Choose saved inventory…';
+  $load_button_label = 'Load Inventory';
+  $save_button_label = 'Add to Inventory';
+  $clear_button_label = 'Clear Buffer';
+  $section_heading = 'Buffer';
+  $saved_inventory_heading = 'Saved Inventory';
+  $load_message_empty = 'No inventory saved yet. Save to create the inventory file.';
+  $load_message_ready = 'Inventory found. Loading automatically…';
+  $save_action = 'ptcgdm_save_inventory';
+  $nonce_action = 'ptcgdm_save_inventory';
+  $filename_pattern = '%s.json';
+  $fixed_filename = PTCGDM_INVENTORY_FILENAME;
+  $default_basename = 'card-inventory';
+  $force_option_label = 'Card Inventory';
+  $fallback_entity_label = 'inventory';
+  $loading_message = 'Loading inventory…';
+  $save_success_message = "Inventory updated!\nURL:\n";
+  $default_entry_name = 'Untitled Inventory';
+  $saved_args = [
+    'filenames' => [PTCGDM_INVENTORY_FILENAME],
+    'label_map' => [PTCGDM_INVENTORY_FILENAME => 'Card Inventory'],
+  ];
+  $inventory_path = trailingslashit($dir) . PTCGDM_INVENTORY_FILENAME;
+  $auto_load_url = '';
+  if (file_exists($inventory_path)) {
+    $auto_load_url = trailingslashit($url_base) . rawurlencode(PTCGDM_INVENTORY_FILENAME);
   }
 
   $saved_decks = ptcgdm_collect_saved_entries($dir, $url_base, $saved_args);
@@ -1281,24 +265,8 @@ function ptcgdm_render_builder($mode = 'deck'){
 
       <div class="row" style="margin-top:12px;align-items:flex-end">
         <div style="flex:1 1 420px">
-          <?php if ($mode === 'inventory') : ?>
-            <p class="description" id="deckLoadStatus" data-default="<?php echo esc_attr($load_message); ?>"><?php echo esc_html($load_message); ?></p>
-          <?php else : ?>
-            <label><?php echo esc_html($load_label); ?></label>
-            <select id="savedDeckSelect">
-              <option value=""><?php echo esc_html($select_placeholder); ?></option>
-              <?php foreach ($saved_decks as $deck) :
-                $label = $deck['title'] ?: $deck['filename'];
-              ?>
-                <option value="<?php echo esc_url($deck['url']); ?>" data-filename="<?php echo esc_attr($deck['filename']); ?>"><?php echo esc_html($label); ?></option>
-              <?php endforeach; ?>
-            </select>
-            <p class="description" id="deckLoadStatus" data-default="<?php echo esc_attr($load_message); ?>"><?php echo esc_html($load_message); ?></p>
-          <?php endif; ?>
+          <p class="description" id="deckLoadStatus" data-default="<?php echo esc_attr($load_message); ?>"><?php echo esc_html($load_message); ?></p>
         </div>
-        <?php if ($mode !== 'inventory') : ?>
-          <div><button id="btnLoadDeck" class="btn secondary" disabled><?php echo esc_html($load_button_label); ?></button></div>
-        <?php endif; ?>
       </div>
 
       <div style="margin-top:16px">
@@ -1322,49 +290,35 @@ function ptcgdm_render_builder($mode = 'deck'){
       <div class="muted" id="filterCount" style="margin:8px 0">Pick a set & supertype to begin.</div>
       <div id="results" class="results"></div>
 
-      <?php if ($mode === 'inventory') : ?>
-        <h3 style="margin:16px 0 8px"><?php echo esc_html($section_heading); ?></h3>
-        <div style="overflow:auto">
-          <table id="deckTable"><thead><tr><th>#</th><th>Name</th><th>Set</th><th>No.</th><th>Supertype</th><th>Qty (Normal)</th><th>Price (Normal)</th><th>Qty (Foil)</th><th>Price (Foil)</th><th>Qty (Reverse Foil)</th><th>Price (Reverse Foil)</th><th>Qty (Stamped)</th><th>Price (Stamped)</th><th>Actions</th></tr></thead><tbody id="deckBody"><tr><td colspan="14" class="muted">No cards yet.</td></tr></tbody></table>
-        </div>
+      <h3 style="margin:16px 0 8px"><?php echo esc_html($section_heading); ?></h3>
+      <div style="overflow:auto">
+        <table id="deckTable"><thead><tr><th>#</th><th>Name</th><th>Set</th><th>No.</th><th>Supertype</th><th>Qty (Normal)</th><th>Price (Normal)</th><th>Qty (Foil)</th><th>Price (Foil)</th><th>Qty (Reverse Foil)</th><th>Price (Reverse Foil)</th><th>Qty (Stamped)</th><th>Price (Stamped)</th><th>Actions</th></tr></thead><tbody id="deckBody"><tr><td colspan="14" class="muted">No cards yet.</td></tr></tbody></table>
+      </div>
 
-        <div class="row" style="margin-top:12px;align-items:center;justify-content:space-between">
-          <div>
-            <button id="btnSaveDeck" class="btn secondary" disabled><?php echo esc_html($save_button_label); ?></button>
-          </div>
-          <div><strong>Buffer Total:</strong> <span id="deckTotals" class="chip">0 cards</span></div>
+      <div class="row" style="margin-top:12px;align-items:center;justify-content:space-between">
+        <div>
+          <button id="btnSaveDeck" class="btn secondary" disabled><?php echo esc_html($save_button_label); ?></button>
         </div>
+        <div><strong>Buffer Total:</strong> <span id="deckTotals" class="chip">0 cards</span></div>
+      </div>
 
-        <h3 style="margin:24px 0 8px"><?php echo esc_html($saved_inventory_heading ?? 'Saved Inventory'); ?></h3>
-        <div class="row" style="margin:0 0 8px;align-items:center;justify-content:flex-end">
-          <div style="display:flex;align-items:center;gap:8px">
-            <label for="inventorySortMode" style="margin:0;font-size:12px;color:var(--muted);">Sort saved cards</label>
-            <select id="inventorySortMode">
-              <option value="alpha">Name (A→Z)</option>
-              <option value="number">Card No.</option>
-            </select>
-          </div>
+      <h3 style="margin:24px 0 8px"><?php echo esc_html($saved_inventory_heading ?? 'Saved Inventory'); ?></h3>
+      <div class="row" style="margin:0 0 8px;align-items:center;justify-content:flex-end">
+        <div style="display:flex;align-items:center;gap:8px">
+          <label for="inventorySortMode" style="margin:0;font-size:12px;color:var(--muted);">Sort saved cards</label>
+          <select id="inventorySortMode">
+            <option value="alpha">Name (A→Z)</option>
+            <option value="number">Card No.</option>
+          </select>
         </div>
-        <div style="overflow:auto">
-          <table id="inventoryDataTable"><thead><tr><th>#</th><th>Name</th><th>Set</th><th>No.</th><th>Supertype</th><th>Qty (Normal)</th><th>Price (Normal)</th><th>Qty (Foil)</th><th>Price (Foil)</th><th>Qty (Reverse Foil)</th><th>Price (Reverse Foil)</th><th>Qty (Stamped)</th><th>Price (Stamped)</th><th>Actions</th></tr></thead><tbody id="inventoryDataBody"><tr><td colspan="14" class="muted">No inventory saved yet.</td></tr></tbody></table>
-        </div>
+      </div>
+      <div style="overflow:auto">
+        <table id="inventoryDataTable"><thead><tr><th>#</th><th>Name</th><th>Set</th><th>No.</th><th>Supertype</th><th>Qty (Normal)</th><th>Price (Normal)</th><th>Qty (Foil)</th><th>Price (Foil)</th><th>Qty (Reverse Foil)</th><th>Price (Reverse Foil)</th><th>Qty (Stamped)</th><th>Price (Stamped)</th><th>Actions</th></tr></thead><tbody id="inventoryDataBody"><tr><td colspan="14" class="muted">No inventory saved yet.</td></tr></tbody></table>
+      </div>
 
-        <div class="row" style="margin-top:12px;align-items:center;justify-content:flex-end">
-          <div><strong>Saved Total:</strong> <span id="inventoryTotals" class="chip">0 cards</span></div>
-        </div>
-      <?php else : ?>
-        <h3 style="margin:16px 0 8px"><?php echo esc_html($section_heading); ?></h3>
-        <div style="overflow:auto">
-          <table id="deckTable"><thead><tr><th>#</th><th>Name</th><th>Set</th><th>No.</th><th>Supertype</th><th>Qty</th><th>Actions</th></tr></thead><tbody id="deckBody"><tr><td colspan="7" class="muted">No cards yet.</td></tr></tbody></table>
-        </div>
-
-        <div class="row" style="margin-top:12px;align-items:center;justify-content:space-between">
-          <div>
-            <button id="btnSaveDeck" class="btn secondary" disabled><?php echo esc_html($save_button_label); ?></button>
-          </div>
-          <div><strong>Total:</strong> <span id="deckTotals" class="chip">0 cards</span></div>
-        </div>
-      <?php endif; ?>
+      <div class="row" style="margin-top:12px;align-items:center;justify-content:flex-end">
+        <div><strong>Saved Total:</strong> <span id="inventoryTotals" class="chip">0 cards</span></div>
+      </div>
     </div>
 
     <script>
@@ -1373,23 +327,23 @@ function ptcgdm_render_builder($mode = 'deck'){
       const SAVE_NONCE = '<?php echo esc_js($nonce); ?>';
       const AJAX_URL = '<?php echo admin_url('admin-ajax.php'); ?>';
       const SAVE_CONFIG = Object.assign({
-        saveAction: 'ptcgdm_save_deck',
-        defaultBasename: 'deck',
+        saveAction: 'ptcgdm_save_inventory',
+        defaultBasename: 'card-inventory',
         filenamePattern: '%s.json',
-        fixedFilename: '',
-        successMessage: 'Saved! View it under Deck Library.\nURL:\n',
-        loadButtonLabel: 'Load Deck',
-        loadingMessage: 'Loading…',
-        fallbackEntityLabel: 'deck',
-        forceOptionLabel: '',
-        defaultEntryName: 'Untitled Deck',
+        fixedFilename: '<?php echo esc_js(PTCGDM_INVENTORY_FILENAME); ?>',
+        successMessage: 'Inventory updated!\nURL:\n',
+        loadButtonLabel: 'Load Inventory',
+        loadingMessage: 'Loading inventory…',
+        fallbackEntityLabel: 'inventory',
+        forceOptionLabel: 'Card Inventory',
+        defaultEntryName: 'Untitled Inventory',
         autoLoadUrl: '',
-        deleteInventoryAction: '',
+        deleteInventoryAction: 'ptcgdm_delete_inventory_card',
         deleteInventoryNonce: '',
         inventorySortDefault: 'alpha',
       }, <?php echo $script_config; ?>);
-      const MODE = (SAVE_CONFIG.mode || 'deck');
-      const IS_INVENTORY = MODE === 'inventory';
+      const MODE = 'inventory';
+      const IS_INVENTORY = true;
       const INVENTORY_BUFFER_MIN = -999;
       const INVENTORY_BUFFER_MAX = 999;
       const INVENTORY_VARIANTS = [
@@ -2861,7 +1815,7 @@ function ptcgdm_render_builder($mode = 'deck'){
           }
         }
         const body=new FormData();
-        body.append('action', SAVE_CONFIG.saveAction || 'ptcgdm_save_deck');
+        body.append('action', SAVE_CONFIG.saveAction || 'ptcgdm_save_inventory');
         body.append('nonce', SAVE_NONCE);
         body.append('filename', filename);
         const entriesForSave = updateJSON();
@@ -3158,26 +2112,6 @@ function ptcgdm_render_builder($mode = 'deck'){
   </div>
 <?php }
 
-/** AJAX: Save deck JSON into plugin deck library */
-add_action('wp_ajax_ptcgdm_save_deck', function(){
-  if (!current_user_can('manage_options')) wp_send_json_error('Permission denied', 403);
-  check_ajax_referer('ptcgdm_save_deck', 'nonce');
-
-  $filename = sanitize_file_name($_POST['filename'] ?? 'deck.json');
-  $content  = wp_unslash($_POST['content'] ?? '');
-  if (!$content) wp_send_json_error('Empty content');
-
-  $dir = trailingslashit(ptcgdm_get_deck_dir());
-  if (!file_exists($dir) && !wp_mkdir_p($dir)) wp_send_json_error('Unable to create deck directory');
-  if (!is_writable($dir)) wp_send_json_error('Deck directory not writable');
-
-  $path = $dir . $filename;
-
-  if (file_put_contents($path, $content) === false) wp_send_json_error('Write failed');
-
-  $url = trailingslashit(ptcgdm_get_deck_url()) . rawurlencode($filename);
-  wp_send_json_success(['url' => $url, 'path' => $path]);
-});
 
 add_action('wp_ajax_ptcgdm_save_inventory', function(){
   if (!current_user_can('manage_options')) wp_send_json_error('Permission denied', 403);
@@ -5965,7 +4899,7 @@ if (function_exists('add_action')) {
 }
 
 function ptcgdm_render_inventory() {
-  ptcgdm_render_builder('inventory');
+  ptcgdm_render_builder();
 }
 
 function ptcgdm_extract_set_from_card($card_id){
@@ -6083,31 +5017,4 @@ function ptcgdm_is_list($array){
     $index++;
   }
   return true;
-}
-
-/** Helpers */
-function ptcgdm_rrmdir($dir){
-  if (!file_exists($dir)) return;
-  if (is_file($dir) || is_link($dir)) { @unlink($dir); return; }
-  foreach (scandir($dir) as $i){ if ($i === '.' || $i === '..') continue; ptcgdm_rrmdir($dir . DIRECTORY_SEPARATOR . $i); }
-  @rmdir($dir);
-}
-function ptcgdm_rcopy($src, $dst){
-  $dir = opendir($src); @mkdir($dst, 0755, true);
-  while(false !== ($file = readdir($dir))){
-    if ($file != '.' && $file != '..'){
-      if (is_dir($src . '/' . $file)) ptcgdm_rcopy($src . '/' . $file, $dst . '/' . $file);
-      else copy($src . '/' . $file, $dst . '/' . $file);
-    }
-  } closedir($dir);
-}
-function ptcgdm_find_cards_root($base){
-  if (is_dir($base . '/pokemon-tcg-data/cards/en')) return $base . '/pokemon-tcg-data';
-  if (is_dir($base . '/cards/en')) return $base;
-  $it = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($base, FilesystemIterator::SKIP_DOTS));
-  foreach ($it as $f){
-    if ($f->isDir() && preg_match('~/cards/en$~', str_replace('\\','/',$f->getPathname()))) return dirname($f->getPathname(), 2);
-  }
-  return false;
-
 }
