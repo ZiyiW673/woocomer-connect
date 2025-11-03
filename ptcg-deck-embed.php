@@ -2130,10 +2130,7 @@ add_action('wp_ajax_ptcgdm_save_inventory', function(){
   $path = $dir . PTCGDM_INVENTORY_FILENAME;
   if (file_put_contents($path, $content) === false) wp_send_json_error('Write failed');
 
-  $syncQueued = ptcgdm_queue_inventory_sync();
-  if (!$syncQueued) {
-    ptcgdm_run_inventory_sync_event();
-  }
+  $syncQueued = ptcgdm_trigger_inventory_sync();
 
   $url = trailingslashit(ptcgdm_get_inventory_url()) . rawurlencode(PTCGDM_INVENTORY_FILENAME);
   $response = ['url' => $url, 'path' => $path];
@@ -2181,10 +2178,7 @@ add_action('wp_ajax_ptcgdm_delete_inventory_card', function(){
     $message .= ' WooCommerce product deleted.';
   }
 
-  $syncQueued = ptcgdm_queue_inventory_sync();
-  if (!$syncQueued) {
-    ptcgdm_run_inventory_sync_event();
-  }
+  $syncQueued = ptcgdm_trigger_inventory_sync();
 
   $response = [
     'cardId'         => $card_id,
@@ -3615,7 +3609,17 @@ function ptcgdm_queue_inventory_sync() {
   return false;
 }
 
+function ptcgdm_trigger_inventory_sync() {
+  $queued = ptcgdm_queue_inventory_sync();
+  ptcgdm_run_inventory_sync_event();
+  return $queued;
+}
+
 function ptcgdm_run_inventory_sync_event() {
+  if (ptcgdm_is_inventory_syncing()) {
+    return;
+  }
+
   $dir = trailingslashit(ptcgdm_get_inventory_dir());
   $path = $dir . PTCGDM_INVENTORY_FILENAME;
 
