@@ -721,6 +721,7 @@ function ptcgdm_render_builder(array $config = []){
         : null;
 
       const DATASET_KEY = typeof SAVE_CONFIG.datasetKey === 'string' ? SAVE_CONFIG.datasetKey : 'pokemon';
+      const IS_ONE_PIECE = DATASET_KEY === 'one_piece';
       const RAW_SET_LABELS = (SAVE_CONFIG.setLabels && typeof SAVE_CONFIG.setLabels === 'object' && !Array.isArray(SAVE_CONFIG.setLabels)) ? SAVE_CONFIG.setLabels : {};
       const SET_LABELS = {};
       Object.entries(RAW_SET_LABELS).forEach(([key, value]) => {
@@ -959,6 +960,41 @@ function ptcgdm_render_builder(array $config = []){
           }
         });
         return out;
+      }
+
+      function createDeckEntryFromSaved(cardId){
+        if(!IS_INVENTORY || !cardId) return null;
+        const saved = inventorySavedMap.get(cardId);
+        if(!saved || typeof saved !== 'object') return null;
+        const variantsSource = saved.variants && typeof saved.variants === 'object' ? saved.variants : {};
+        const entry = { id: cardId, variants: {} };
+        let hasData = false;
+        INVENTORY_VARIANTS.forEach(({ key })=>{
+          const source = variantsSource[key];
+          if(source && source.qty !== undefined){
+            const parsedQty = clampBufferQty(source.qty);
+            if(Number.isFinite(parsedQty) && parsedQty > 0){
+              hasData = true;
+            }
+          }
+          let priceValue = null;
+          if(source && source.price !== undefined){
+            const parsedPrice = parsePriceValue(source.price);
+            if(Number.isFinite(parsedPrice)){
+              priceValue = parsedPrice;
+              hasData = true;
+            }
+          }
+          entry.variants[key] = {
+            qty: 0,
+            price: Number.isFinite(priceValue) ? priceValue : null,
+          };
+        });
+        if(!hasData){
+          return null;
+        }
+        sumInventoryVariantQuantities(entry);
+        return entry;
       }
 
       function sumInventoryVariantQuantities(entry){
@@ -1959,7 +1995,12 @@ function ptcgdm_render_builder(array $config = []){
           }
           displayIndex++;
           total += entryQty;
-          rows.push(`<tr data-id="${esc(entry.id)}" data-card-name="${esc(meta.name)}"><td>${displayIndex}</td><td>${esc(meta.name)}</td><td>${esc(meta.setName)}</td><td>${esc(meta.number)}</td><td>${esc(meta.supertype)}</td>${variantCells.join('')}<td><button class="btn danger" data-action="delete-saved" data-name="${esc(meta.name)}">Delete</button></td></tr>`);
+          const actionButtons = [];
+          if(IS_ONE_PIECE){
+            actionButtons.push(`<button class="btn secondary" data-action="edit-price" data-name="${esc(meta.name)}">Change Price</button>`);
+          }
+          actionButtons.push(`<button class="btn danger" data-action="delete-saved" data-name="${esc(meta.name)}">Delete</button>`);
+          rows.push(`<tr data-id="${esc(entry.id)}" data-card-name="${esc(meta.name)}"><td>${displayIndex}</td><td>${esc(meta.name)}</td><td>${esc(meta.setName)}</td><td>${esc(meta.number)}</td><td>${esc(meta.supertype)}</td>${variantCells.join('')}<td>${actionButtons.join(' ')}</td></tr>`);
         });
 
         if(!rows.length){
@@ -1970,6 +2011,48 @@ function ptcgdm_render_builder(array $config = []){
 
         els.inventoryBody.innerHTML = rows.join('');
         if(els.inventoryTotals) els.inventoryTotals.textContent = `${total} card${total===1?'':'s'}`;
+      }
+
+      function queueInventoryPriceChange(cardId){
+        if(!IS_INVENTORY || !IS_ONE_PIECE || !cardId) return;
+        const entry = createDeckEntryFromSaved(cardId);
+        if(!entry){
+          alert('Saved inventory details are unavailable for this card.');
+          return;
+        }
+        let replaced = false;
+        if(deckMap.has(cardId)){
+          const idx = deckMap.get(cardId);
+          if(idx !== undefined){
+            deck[idx] = entry;
+            replaced = true;
+          }
+        }
+        if(!replaced){
+          deck.push(entry);
+        }
+        deckMap.clear();
+        deck.forEach((item, index)=>{
+          if(item && item.id){
+            deckMap.set(item.id, index);
+          }
+        });
+        renderDeckTable();
+        updateJSON();
+        if(!els.deckBody) return;
+        const deckRows = Array.from(els.deckBody.querySelectorAll('tr[data-id]'));
+        const row = deckRows.find(r=>r.getAttribute('data-id') === cardId);
+        if(!row) return;
+        if(typeof row.scrollIntoView === 'function'){
+          row.scrollIntoView({ block: 'nearest' });
+        }
+        const priceInput = row.querySelector('.variantPriceInput');
+        if(priceInput && typeof priceInput.focus === 'function'){
+          priceInput.focus();
+          if(typeof priceInput.select === 'function'){
+            priceInput.select();
+          }
+        }
       }
 
       function removeInventoryEntryLocal(cardId){
@@ -2053,16 +2136,24 @@ function ptcgdm_render_builder(array $config = []){
       function handleInventoryBodyClick(event){
         const target = event.target instanceof Element ? event.target : null;
         if(!target) return;
-        const button = target.closest('button[data-action="delete-saved"]');
+        const button = target.closest('button[data-action]');
         if(!button) return;
-        event.preventDefault();
+        const action = button.dataset.action || '';
         const row = button.closest('tr[data-id]');
         const cardId = row?.getAttribute('data-id') || button.dataset.id || '';
         if(!cardId) return;
-        const cardName = button.dataset.name || row?.getAttribute('data-card-name') || cardId;
-        const confirmation = `Delete ${cardName} from saved inventory and remove its WooCommerce product?`;
-        if(!window.confirm(confirmation)) return;
-        deleteSavedInventoryEntry(cardId, button, cardName);
+        if(action === 'edit-price'){
+          event.preventDefault();
+          queueInventoryPriceChange(cardId);
+          return;
+        }
+        if(action === 'delete-saved'){
+          event.preventDefault();
+          const cardName = button.dataset.name || row?.getAttribute('data-card-name') || cardId;
+          const confirmation = `Delete ${cardName} from saved inventory and remove its WooCommerce product?`;
+          if(!window.confirm(confirmation)) return;
+          deleteSavedInventoryEntry(cardId, button, cardName);
+        }
       }
       function setInventoryData(entries){
         if(!IS_INVENTORY) return;
