@@ -571,8 +571,6 @@ function ptcgdm_render_builder(array $config = []){
       <div id="dbStatusRow"><strong>Status:</strong> <span id="dbStatus" class="muted">Loading local dataset…</span></div>
 
       <div class="grid4" style="margin-top:12px">
-        <div><label>Deck Name</label><input id="deckName" placeholder="My Deck"></div>
-        <div><label>Format</label><input id="deckFormat" placeholder="<?php echo esc_attr($default_format); ?>"></div>
         <div>
           <label>Set</label>
           <select id="selSet" disabled><option value="">Loading…</option></select>
@@ -597,6 +595,7 @@ function ptcgdm_render_builder(array $config = []){
         </div>
       </div>
 
+      <?php if ($dataset_key !== 'one_piece') : ?>
       <div style="margin-top:16px">
         <label for="bulkInput">Bulk Add by Code</label>
         <textarea id="bulkInput" class="bulk-input" rows="8" placeholder="4 Gholdengo ex PAR 139&#10;3 Pokégear 3.0 SVI 186&#10;2 Rare Candy SUM 129" spellcheck="false"></textarea>
@@ -608,6 +607,7 @@ function ptcgdm_render_builder(array $config = []){
           <div id="bulkStatus" class="muted bulk-status"></div>
         </div>
       </div>
+      <?php endif; ?>
 
       <div class="row" style="margin-top:12px;align-items:flex-end">
         <div style="flex:1 1 600px"><label>Name (type to filter)</label><input id="nameInput" placeholder="e.g., Pikachu, Nest Ball"></div>
@@ -857,6 +857,36 @@ function ptcgdm_render_builder(array $config = []){
       }
 
       let isSavingDeck = false;
+      let deckNameState = typeof SAVE_CONFIG.defaultEntryName === 'string' ? SAVE_CONFIG.defaultEntryName : '';
+      let deckFormatState = typeof SAVE_CONFIG.defaultFormat === 'string' ? SAVE_CONFIG.defaultFormat : '';
+
+      function getDeckNameValue(){
+        if (els.deckName && typeof els.deckName.value === 'string') {
+          deckNameState = els.deckName.value;
+        }
+        return (deckNameState || '').trim();
+      }
+
+      function setDeckNameValue(value){
+        deckNameState = typeof value === 'string' ? value : '';
+        if (els.deckName) {
+          els.deckName.value = deckNameState;
+        }
+      }
+
+      function getDeckFormatValue(){
+        if (els.deckFormat && typeof els.deckFormat.value === 'string') {
+          deckFormatState = els.deckFormat.value;
+        }
+        return (deckFormatState || '').trim();
+      }
+
+      function setDeckFormatValue(value){
+        deckFormatState = typeof value === 'string' ? value : '';
+        if (els.deckFormat) {
+          els.deckFormat.value = deckFormatState;
+        }
+      }
 
       function clampBufferQty(value){
         if(IS_INVENTORY){
@@ -1076,10 +1106,24 @@ function ptcgdm_render_builder(array $config = []){
         els.nameInput.addEventListener('keydown', e=>{ if(e.key==='Enter'){ e.preventDefault(); addFirstMatch(); }});
         els.selQty.addEventListener('input', ()=>updateAddButton(0));
         els.btnAdd.addEventListener('click', addFirstMatch);
-        els.btnClearDeck.addEventListener('click', clearDeck);
-        els.btnSaveDeck.addEventListener('click', saveDeck);
-        els.deckName.addEventListener('input', updateJSON);
-        els.deckFormat.addEventListener('input', updateJSON);
+        if (els.btnClearDeck) {
+          els.btnClearDeck.addEventListener('click', clearDeck);
+        }
+        if (els.btnSaveDeck) {
+          els.btnSaveDeck.addEventListener('click', saveDeck);
+        }
+        if (els.deckName) {
+          els.deckName.addEventListener('input', ()=>{
+            deckNameState = typeof els.deckName.value === 'string' ? els.deckName.value : '';
+            updateJSON();
+          });
+        }
+        if (els.deckFormat) {
+          els.deckFormat.addEventListener('input', ()=>{
+            deckFormatState = typeof els.deckFormat.value === 'string' ? els.deckFormat.value : '';
+            updateJSON();
+          });
+        }
         if (els.bulkInput) {
           els.bulkInput.addEventListener('input', updateBulkAddState);
         }
@@ -2487,9 +2531,11 @@ function ptcgdm_render_builder(array $config = []){
       }
       function updateJSON(){
         const entries = buildSaveEntries();
+        const deckNameValue = getDeckNameValue();
+        const deckFormatValue = getDeckFormatValue();
         const out = {
-          name: els.deckName.value.trim() || (SAVE_CONFIG.defaultEntryName || 'Untitled Deck'),
-          format: els.deckFormat.value.trim() || (SAVE_CONFIG.defaultFormat || 'Standard'),
+          name: deckNameValue || (SAVE_CONFIG.defaultEntryName || 'Untitled Deck'),
+          format: deckFormatValue || (SAVE_CONFIG.defaultFormat || 'Standard'),
           cards: entries,
         };
         deckJsonCache = JSON.stringify(out, null, 2);
@@ -2508,7 +2554,7 @@ function ptcgdm_render_builder(array $config = []){
           button.dataset.saving = '1';
           button.textContent = button.dataset.savingLabel || 'Saving…';
         }
-        const rawName = els.deckName.value.trim();
+        const rawName = getDeckNameValue();
         const fallbackBase = SAVE_CONFIG.defaultBasename || 'deck';
         let safeBase = (rawName || fallbackBase).replace(/[^\w-]+/g,'_');
         if (!safeBase) safeBase = fallbackBase.replace(/[^\w-]+/g,'_') || 'deck';
@@ -2531,7 +2577,7 @@ function ptcgdm_render_builder(array $config = []){
           const r = await fetch(AJAX_URL, { method:'POST', body });
           const j = await r.json();
           if (!j.success) throw new Error(j.data || 'Unknown error');
-          const displayName = els.deckName.value.trim();
+          const displayName = getDeckNameValue();
           if (!IS_INVENTORY) {
             ensureSavedDeckOption(j.data?.url || '', filename, displayName);
           }
@@ -2646,8 +2692,10 @@ function ptcgdm_render_builder(array $config = []){
       function applyDeckData(data, options = {}){
         if (!data || typeof data !== 'object') throw new Error('JSON missing data.');
         const entries = normalizeDeckEntries(data);
-        if (typeof data.name === 'string') els.deckName.value = data.name;
-        if (typeof data.format === 'string') els.deckFormat.value = data.format;
+        if (typeof data.name === 'string') setDeckNameValue(data.name);
+        else setDeckNameValue('');
+        if (typeof data.format === 'string') setDeckFormatValue(data.format);
+        else setDeckFormatValue('');
         const isInventorySnapshot = IS_INVENTORY && options.updateInventory === true;
         if (!entries.length) {
           deck.length = 0;
