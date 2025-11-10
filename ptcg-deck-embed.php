@@ -4710,6 +4710,9 @@ function ptcgdm_sync_inventory_product_variations($product, array $active_varian
 
   $attribute_name = 'Type';
   $attribute_slug = sanitize_title($attribute_name);
+  $variation_attribute_key = function_exists('wc_variation_attribute_name')
+    ? wc_variation_attribute_name($attribute_slug)
+    : 'attribute_' . $attribute_slug;
   $options = [];
   foreach ($active_variants as $key => $data) {
     $options[] = ptcgdm_inventory_variant_label($key);
@@ -4796,7 +4799,7 @@ function ptcgdm_sync_inventory_product_variations($product, array $active_varian
     }
 
     $label = ptcgdm_inventory_variant_label($key);
-    $attributes = [$attribute_slug => $label];
+    $attributes = [$variation_attribute_key => $label];
     if (method_exists($variation, 'set_attributes')) {
       $variation->set_attributes($attributes);
     }
