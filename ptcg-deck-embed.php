@@ -4720,7 +4720,7 @@ function ptcgdm_sync_inventory_product_variations($product, array $active_varian
   $options = array_values(array_unique(array_filter($options, 'strlen')));
 
   $default_attributes = [];
-  if (count($options) === 1) {
+  if (!empty($options)) {
     $default_attributes[$attribute_slug] = $options[0];
   }
 
