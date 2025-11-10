@@ -4716,6 +4716,11 @@ function ptcgdm_sync_inventory_product_variations($product, array $active_varian
   }
   $options = array_values(array_unique(array_filter($options, 'strlen')));
 
+  $default_attributes = [];
+  if (count($options) === 1) {
+    $default_attributes[$attribute_slug] = $options[0];
+  }
+
   if (class_exists('WC_Product_Attribute')) {
     $attribute = new WC_Product_Attribute();
     $attribute->set_id(0);
@@ -4736,6 +4741,12 @@ function ptcgdm_sync_inventory_product_variations($product, array $active_varian
         'is_taxonomy'  => 0,
       ],
     ]);
+  }
+
+  if (method_exists($product, 'set_default_attributes')) {
+    $product->set_default_attributes($default_attributes);
+  } else {
+    $product->update_meta_data('_default_attributes', $default_attributes);
   }
 
   $existing_children = [];
