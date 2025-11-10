@@ -2050,9 +2050,7 @@ function ptcgdm_render_builder(array $config = []){
           displayIndex++;
           total += entryQty;
           const actionButtons = [];
-          if(IS_ONE_PIECE){
-            actionButtons.push(`<button class="btn secondary" data-action="edit-price" data-name="${esc(meta.name)}">Change Price</button>`);
-          }
+          actionButtons.push(`<button class="btn secondary" data-action="edit-price" data-name="${esc(meta.name)}">Change Price</button>`);
           actionButtons.push(`<button class="btn danger" data-action="delete-saved" data-name="${esc(meta.name)}">Delete</button>`);
           rows.push(`<tr data-id="${esc(entry.id)}" data-card-name="${esc(meta.name)}"><td>${displayIndex}</td><td>${esc(meta.name)}</td><td>${esc(meta.setName)}</td><td>${esc(meta.number)}</td><td>${esc(meta.supertype)}</td>${variantCells.join('')}<td>${actionButtons.join(' ')}</td></tr>`);
         });
@@ -2068,7 +2066,7 @@ function ptcgdm_render_builder(array $config = []){
       }
 
       function queueInventoryPriceChange(cardId){
-        if(!IS_INVENTORY || !IS_ONE_PIECE || !cardId) return;
+        if(!IS_INVENTORY || !cardId) return;
         const entry = createDeckEntryFromSaved(cardId);
         if(!entry){
           alert('Saved inventory details are unavailable for this card.');
