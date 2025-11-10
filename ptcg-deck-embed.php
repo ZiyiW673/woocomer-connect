@@ -5038,7 +5038,7 @@ function ptcgdm_sync_inventory_products(array $entries) {
       $primary_variant = $variants[$primary_variant_key];
       $primary_qty = isset($primary_variant['qty']) ? (int) $primary_variant['qty'] : 0;
       $primary_price = isset($primary_variant['price']) ? $primary_variant['price'] : null;
-      $requires_variable = count($active_variants) > 1;
+      $requires_variable = !empty($variants);
 
       $card_preview = ptcgdm_lookup_card_preview($card_id);
       $set_id = isset($card_preview['set']) ? trim((string) $card_preview['set']) : '';
@@ -5098,22 +5098,12 @@ function ptcgdm_sync_inventory_products(array $entries) {
             if (method_exists($product, 'set_type')) {
               $product->set_type('variable');
             }
-          } elseif (!$requires_variable && $current_type !== 'simple') {
-            $class_name = class_exists('WC_Product_Factory') ? WC_Product_Factory::get_product_classname($product_id, 'simple') : '';
-            if ($class_name && class_exists($class_name)) {
-              $product = new $class_name($product_id);
-            } else {
-              $product = new WC_Product_Simple($product_id);
-            }
-            if (method_exists($product, 'set_type')) {
-              $product->set_type('simple');
-            }
           }
         }
       }
 
       if (!$product instanceof WC_Product) {
-        $product = $requires_variable ? new WC_Product_Variable() : new WC_Product_Simple();
+        $product = new WC_Product_Variable();
         if (method_exists($product, 'set_sku')) {
           $product->set_sku($sku);
         }
@@ -5136,20 +5126,11 @@ function ptcgdm_sync_inventory_products(array $entries) {
         }
       }
 
-      if ($requires_variable) {
-        $product->set_manage_stock(false);
-        if (method_exists($product, 'set_stock_quantity')) {
-          $product->set_stock_quantity(null);
-        }
-        $product->set_stock_status($total_qty > 0 ? 'instock' : 'outofstock');
-      } else {
-        $product->set_manage_stock(true);
-        $product->set_stock_quantity($primary_qty);
-        $product->set_stock_status($primary_qty > 0 ? 'instock' : 'outofstock');
-        if (method_exists($product, 'set_attributes')) {
-          $product->set_attributes([]);
-        }
+      $product->set_manage_stock(false);
+      if (method_exists($product, 'set_stock_quantity')) {
+        $product->set_stock_quantity(null);
       }
+      $product->set_stock_status($total_qty > 0 ? 'instock' : 'outofstock');
 
       $product->set_catalog_visibility('visible');
       $product->update_meta_data('_ptcgdm_managed', '1');
@@ -5164,25 +5145,15 @@ function ptcgdm_sync_inventory_products(array $entries) {
         $product->save();
       }
 
-      if (!$requires_variable && $product->get_id()) {
-        ptcgdm_delete_product_variations($product->get_id());
-        $product->update_meta_data('_ptcgdm_variant_key', $primary_variant_key);
-        if ($primary_price !== null) {
-          $formatted_price = function_exists('wc_format_decimal') ? wc_format_decimal($primary_price) : number_format((float) $primary_price, 2, '.', '');
-          $product->set_regular_price($formatted_price);
-          $product->set_price($formatted_price);
-        }
+      $product->update_meta_data('_ptcgdm_variant_key', 'variable');
+      $min_price = ptcgdm_sync_inventory_product_variations($product, $active_variants, $sku);
+      if ($min_price !== null) {
+        $formatted_price = function_exists('wc_format_decimal') ? wc_format_decimal($min_price) : number_format((float) $min_price, 2, '.', '');
+        $product->set_regular_price($formatted_price);
+        $product->set_price($formatted_price);
       } else {
-        $product->update_meta_data('_ptcgdm_variant_key', 'variable');
-        $min_price = ptcgdm_sync_inventory_product_variations($product, $active_variants, $sku);
-        if ($min_price !== null) {
-          $formatted_price = function_exists('wc_format_decimal') ? wc_format_decimal($min_price) : number_format((float) $min_price, 2, '.', '');
-          $product->set_regular_price($formatted_price);
-          $product->set_price($formatted_price);
-        } else {
-          $product->set_regular_price('');
-          $product->set_price('');
-        }
+        $product->set_regular_price('');
+        $product->set_price('');
       }
 
       ptcgdm_store_managed_product_snapshot($product, [
