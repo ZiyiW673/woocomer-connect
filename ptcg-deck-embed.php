@@ -599,8 +599,8 @@ function ptcgdm_render_builder(array $config = []){
       <?php if ($dataset_key !== 'one_piece') : ?>
       <div style="margin-top:16px">
         <label for="bulkInput">Bulk Add by Code</label>
-        <textarea id="bulkInput" class="bulk-input" rows="8" placeholder="4 Gholdengo ex PAR 139&#10;3 Pokégear 3.0 SVI 186&#10;2 Rare Candy SUM 129" spellcheck="false"></textarea>
-        <p class="description">Enter one card per line using “Qty Name SET Number”. Examples: <code>4 Gholdengo ex PAR 139</code>, <code>2 Rare Candy SUM 129</code></p>
+        <textarea id="bulkInput" class="bulk-input" rows="8" placeholder="Abra;MEG;054/132;Psychic;34;5;0&#10;Charizard;BS;004/102;Fire;1;0;0" spellcheck="false"></textarea>
+        <p class="description">Enter one card per line using “Name;Set;ID;Type;Normal;Foil;Reverse”. Example: <code>Abra;MEG;054/132;Psychic;34;5;0</code></p>
         <div class="bulk-actions">
           <button id="btnBulkAdd" class="btn secondary" disabled>Add cards</button>
           <button id="btnClearDeck" class="btn danger" disabled><?php echo esc_html($clear_button_label); ?></button>
@@ -1630,7 +1630,7 @@ function ptcgdm_render_builder(array $config = []){
           processed++;
           const parsed = parseBulkLine(trimmed);
           if(!parsed){
-            errors.push(`Line ${idx+1}: Expected “Qty Name SET Number”.`);
+            errors.push(`Line ${idx+1}: Expected “Name;Set;ID;Type;Normal;Foil;Reverse”.`);
             return;
           }
           if(parsed.error){
@@ -1660,7 +1660,7 @@ function ptcgdm_render_builder(array $config = []){
             return;
           }
           const card = byId.get(cardId);
-          const delta = applyDeckQuantity(cardId, parsed.qty);
+          const delta = applyDeckQuantity(cardId, parsed.qty, parsed.variantQuantities);
           if(delta === null){
             errors.push(`Line ${idx+1}: Unable to add card.`);
             return;
@@ -1680,7 +1680,7 @@ function ptcgdm_render_builder(array $config = []){
           updateJSON();
         }
         if(processed === 0){
-          setBulkStatus('Enter one card per line using “Qty Name SET Number”.', true);
+          setBulkStatus('Enter one card per line using “Name;Set;ID;Type;Normal;Foil;Reverse”.', true);
           updateBulkAddState();
           return;
         }
@@ -1708,7 +1708,69 @@ function ptcgdm_render_builder(array $config = []){
 
       function parseBulkLine(line){
         if(!line) return null;
-        const parts = line.trim().split(/\s+/);
+        const trimmedLine = line.trim();
+        if(!trimmedLine) return null;
+        if(IS_INVENTORY){
+          const segments = trimmedLine.split(';');
+          if(segments.length < 4) return { error: 'Expected “Name;Set;ID;Type;Normal;Foil;Reverse”.' };
+          const parts = segments.map(part => part.trim());
+          const [nameRaw, setTokenRaw, numberTokenRaw, typeRaw, ...quantityTokens] = parts;
+          const name = String(nameRaw || '').trim();
+          if(!name) return { error: 'Missing card name.' };
+          const energyInfo = resolveBasicEnergyInfo(name);
+          const setClean = String(setTokenRaw || '').trim();
+          const numberClean = String(numberTokenRaw || '').trim();
+          const sanitisedSet = setClean.replace(/[^0-9a-zA-Z-]+/g,'');
+          const sanitisedNumber = numberClean.replace(/[^0-9a-zA-Z]+/g,'');
+          if(!sanitisedSet) return { error: 'Missing set code.' };
+          if(!sanitisedNumber) return { error: 'Missing card number.' };
+          const variantQuantities = {};
+          let totalQty = 0;
+          const maxVariants = INVENTORY_VARIANTS.length;
+          const extraTokens = quantityTokens.slice(maxVariants);
+          if(extraTokens.some(token => String(token || '').trim() !== '')){
+            return { error: `Too many quantity values. Expected ${maxVariants}.` };
+          }
+          let quantityError = null;
+          INVENTORY_VARIANTS.forEach(({ key, label }, idx)=>{
+            if(quantityError) return;
+            const token = quantityTokens[idx];
+            if(token === undefined || token === null) return;
+            const normalised = String(token).trim();
+            if(normalised === '') return;
+            if(!/^[-+]?\d+(?:\.\d*)?$/.test(normalised)){
+              quantityError = `Invalid quantity for ${label || key}.`;
+              return;
+            }
+            const parsedQty = parseInt(normalised, 10);
+            if(Number.isNaN(parsedQty) || parsedQty < 0){
+              quantityError = `${label || key} quantity must be zero or greater.`;
+              return;
+            }
+            if(parsedQty > 0){
+              variantQuantities[key] = parsedQty;
+              totalQty += parsedQty;
+            }
+          });
+          if(quantityError){
+            return { error: quantityError };
+          }
+          if(!totalQty) return { error: 'At least one quantity must be greater than zero.' };
+          return {
+            qty: totalQty,
+            name,
+            resolvedName: energyInfo?.displayName || name,
+            setCode: sanitisedSet,
+            setCodeDisplay: sanitisedSet.toUpperCase(),
+            number: sanitisedNumber,
+            numberDisplay: sanitisedNumber.toUpperCase(),
+            searchByName: !!energyInfo,
+            searchNames: energyInfo?.searchNames || [],
+            variantQuantities,
+            cardType: String(typeRaw || '').trim(),
+          };
+        }
+        const parts = trimmedLine.split(/\s+/);
         if(parts.length < 3) return { error: 'Expected quantity, card name, set code, and number.' };
         const qtyToken = parts.shift();
         if(!/^\d+$/.test(qtyToken || '')) return { error: 'Line must start with the quantity.' };
@@ -1905,21 +1967,53 @@ function ptcgdm_render_builder(array $config = []){
         if(delta !== 0){ renderDeckTable(); updateJSON(); }
       }
 
-      function applyDeckQuantity(id, qty){
+      function applyDeckQuantity(id, qty, variantQuantities){
         if(!id) return null;
         const safeQty = IS_INVENTORY ? clampBufferQty(qty) : Math.max(1, Math.min(60, parseInt(qty, 10) || 1));
+        const hasVariantQuantities = IS_INVENTORY && variantQuantities && typeof variantQuantities === 'object';
+        const variantDeltas = {};
+        let requestedVariantTotal = 0;
+        if(hasVariantQuantities){
+          INVENTORY_VARIANTS.forEach(({ key })=>{
+            if(!Object.prototype.hasOwnProperty.call(variantQuantities, key)) return;
+            const rawValue = parseInt(variantQuantities[key], 10);
+            if(!Number.isFinite(rawValue) || rawValue <= 0) return;
+            const safeValue = clampBufferQty(rawValue);
+            if(!Number.isFinite(safeValue) || safeValue <= 0) return;
+            variantDeltas[key] = safeValue;
+            requestedVariantTotal += safeValue;
+          });
+        }
         if(deckMap.has(id)){
           const idx = deckMap.get(id);
           if(idx === undefined) return null;
           if(IS_INVENTORY){
             const entry = deck[idx];
+            if(requestedVariantTotal > 0){
+              let totalApplied = 0;
+              INVENTORY_VARIANTS.forEach(({ key })=>{
+                if(!Object.prototype.hasOwnProperty.call(variantDeltas, key)) return;
+                const deltaValue = variantDeltas[key];
+                const variant = getInventoryVariant(entry, key);
+                const current = Number.isFinite(variant.qty) ? variant.qty : parseInt(variant.qty, 10) || 0;
+                const next = adjustBufferQty(current, deltaValue);
+                const appliedDelta = next - current;
+                variant.qty = next;
+                cleanInventoryVariant(entry, key);
+                if(appliedDelta !== 0){
+                  totalApplied += appliedDelta;
+                }
+              });
+              sumInventoryVariantQuantities(entry);
+              return totalApplied;
+            }
             const variant = getInventoryVariant(entry, 'normal');
             const current = Number.isFinite(variant.qty) ? variant.qty : parseInt(variant.qty, 10) || 0;
             const next = adjustBufferQty(current, safeQty);
             variant.qty = next;
             cleanInventoryVariant(entry, 'normal');
             sumInventoryVariantQuantities(entry);
-            return safeQty;
+            return next - current;
           }
           const current = deck[idx].qty || 0;
           const next = Math.max(1, Math.min(60, current + safeQty));
@@ -1938,6 +2032,21 @@ function ptcgdm_render_builder(array $config = []){
               entry.variants[key] = { qty: 0, price: saved.price };
             }
           });
+          if(requestedVariantTotal > 0){
+            let totalAssigned = 0;
+            INVENTORY_VARIANTS.forEach(({ key })=>{
+              if(!Object.prototype.hasOwnProperty.call(variantDeltas, key)) return;
+              const variant = getInventoryVariant(entry, key);
+              const assigned = variantDeltas[key];
+              variant.qty = assigned;
+              cleanInventoryVariant(entry, key);
+              totalAssigned += assigned;
+            });
+            sumInventoryVariantQuantities(entry);
+            deck.push(entry);
+            deckMap.set(id, index);
+            return totalAssigned;
+          }
           const variant = getInventoryVariant(entry, 'normal');
           variant.qty = initial;
           cleanInventoryVariant(entry, 'normal');
