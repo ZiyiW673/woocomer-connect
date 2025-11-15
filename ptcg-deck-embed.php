@@ -9,6 +9,9 @@ if (!defined('ABSPATH')) exit;
 define('PTCGDM_DIR', plugin_dir_path(__FILE__));
 define('PTCGDM_URL', plugin_dir_url(__FILE__));
 define('PTCGDM_DATA_DIR', PTCGDM_DIR . 'pokemon-tcg-data');
+define('PTCGDM_DATA_URL', PTCGDM_URL . 'pokemon-tcg-data');
+define('PTCGDM_ONE_PIECE_DATA_DIR', PTCGDM_DIR . 'one-piece-tcg-data');
+define('PTCGDM_ONE_PIECE_DATA_URL', PTCGDM_URL . 'one-piece-tcg-data');
 define('PTCGDM_PRODUCT_IMAGE_SIZE', 512);
 define('PTCGDM_INVENTORY_SUBDIR', 'card-inventory');
 define('PTCGDM_INVENTORY_FILENAME', 'card-inventory.json');
@@ -18,6 +21,216 @@ define('PTCGDM_INVENTORY_VARIANTS', [
   'reverseFoil' => 'Reverse Foil',
   'stamped'     => 'Stamped',
 ]);
+
+function ptcgdm_get_dataset_definitions() {
+  static $definitions = null;
+  if ($definitions !== null) {
+    return $definitions;
+  }
+
+  $definitions = [
+    'pokemon' => [
+      'key'              => 'pokemon',
+      'label'            => 'Pokémon TCG',
+      'data_dir'         => PTCGDM_DATA_DIR,
+      'data_url'         => PTCGDM_DATA_URL,
+      'default_format'   => 'Standard',
+      'page_title'       => 'PTCG Deck – Card Inventory',
+      'page_description' => 'Maintain a single card inventory list using the local dataset.',
+      'supertype_options'=> ['Pokémon', 'Trainer', 'Energy'],
+      'series_config'    => [
+        'Sun & Moon' => ['smp','sm1','sm2','sm3','sm35','sm4','sm5','sm6','sm7','sm75','sm8','sm9','det1','sm10','sm11','sm115','sma','sm12'],
+        'Sword & Shield' => ['swshp','swsh1','swsh2','swsh3','swsh35','swsh4','swsh45','swsh45sv','swsh5','swsh6','swsh7','swsh8','swsh9','swsh9tg','swsh10','swsh10tg','pgo','swsh11','swsh11tg','swsh12','swsh12tg','swsh12pt5','swsh12pt5gg'],
+        'Scarlet & Violet' => ['svp','sve','sv1','sv2','sv3','sv3pt5','sv4','sv4pt5','sv5','sv6','sv6pt5','sv7','sv8','sv8pt5','sv9','sv10','zsv10pt5','rsv10pt5'],
+        'Mega Evolution' => ['me1'],
+      ],
+      'set_index_paths'  => [],
+      'is_pokemon'       => true,
+    ],
+    'one_piece' => [
+      'key'              => 'one_piece',
+      'label'            => 'One Piece TCG',
+      'data_dir'         => PTCGDM_ONE_PIECE_DATA_DIR,
+      'data_url'         => PTCGDM_ONE_PIECE_DATA_URL,
+      'default_format'   => 'Constructed',
+      'page_title'       => 'One Piece TCG – Card Inventory',
+      'page_description' => 'Track One Piece TCG card inventory using the local dataset.',
+      'supertype_options'=> ['Leader', 'Character', 'Event', 'Stage'],
+      'series_config'    => null,
+      'set_index_paths'  => ['sets/en/index.json'],
+      'is_pokemon'       => false,
+    ],
+  ];
+
+  return $definitions;
+}
+
+function ptcgdm_get_dataset_settings($dataset_key = 'pokemon') {
+  $definitions = ptcgdm_get_dataset_definitions();
+  $key = strtolower((string) $dataset_key);
+  if (!isset($definitions[$key])) {
+    $key = 'pokemon';
+  }
+
+  static $cache = [];
+  if (isset($cache[$key])) {
+    return $cache[$key];
+  }
+
+  $definition = $definitions[$key];
+
+  $series_config = $definition['series_config'];
+  $set_labels = [];
+
+  if ($series_config === null) {
+    $series_config = ptcgdm_build_one_piece_series_config($definition);
+  }
+
+  if (is_array($series_config)) {
+    foreach ($series_config as $group => $entries) {
+      if (!is_array($entries)) {
+        continue;
+      }
+      foreach ($entries as $entry) {
+        if (is_array($entry)) {
+          $id = isset($entry[0]) ? trim((string) $entry[0]) : '';
+          $label = isset($entry[1]) ? trim((string) $entry[1]) : '';
+          if ($id !== '' && $label !== '') {
+            $set_labels[strtolower($id)] = $label;
+          }
+        }
+      }
+    }
+  }
+
+  $settings = array_merge($definition, [
+    'series_config' => is_array($series_config) ? $series_config : [],
+    'set_labels'    => $set_labels,
+  ]);
+
+  $cache[$key] = $settings;
+  return $settings;
+}
+
+function ptcgdm_build_one_piece_series_config(array $definition) {
+  $data_dir = isset($definition['data_dir']) ? trailingslashit($definition['data_dir']) : '';
+  if ($data_dir === '' || !is_dir($data_dir)) {
+    return [];
+  }
+
+  $cards_dir = $data_dir . 'cards/en';
+  if (!is_dir($cards_dir)) {
+    $cards_dir = $data_dir . 'cards';
+  }
+  if (!is_dir($cards_dir)) {
+    return [];
+  }
+
+  $groups = [
+    'Booster Sets'   => [],
+    'Extra Boosters' => [],
+    'Premium Boosters' => [],
+    'Starter Decks'  => [],
+    'Promotional'    => [],
+    'Other Releases' => [],
+  ];
+
+  $files = glob($cards_dir . '/*.json');
+  if (!$files) {
+    return [];
+  }
+
+  sort($files, SORT_NATURAL | SORT_FLAG_CASE);
+
+  foreach ($files as $path) {
+    $basename = basename($path);
+    if (substr($basename, -5) !== '.json') {
+      continue;
+    }
+    $set_id = substr($basename, 0, -5);
+    if ($set_id === '' || $set_id === 'general') {
+      continue;
+    }
+
+    $label = ptcgdm_extract_one_piece_set_label($path, $set_id);
+
+    if (preg_match('/^op\d+/i', $set_id)) {
+      $group_key = 'Booster Sets';
+    } elseif (preg_match('/^eb\d+/i', $set_id)) {
+      $group_key = 'Extra Boosters';
+    } elseif (preg_match('/^prb\d+/i', $set_id)) {
+      $group_key = 'Premium Boosters';
+    } elseif (preg_match('/^st\d+/i', $set_id)) {
+      $group_key = 'Starter Decks';
+    } elseif ($set_id === 'promotions') {
+      $group_key = 'Promotional';
+    } else {
+      $group_key = 'Other Releases';
+    }
+
+    $groups[$group_key][] = [$set_id, $label];
+  }
+
+  foreach ($groups as $group => &$entries) {
+    if (!$entries) {
+      unset($groups[$group]);
+      continue;
+    }
+    usort($entries, function ($a, $b) {
+      $id_a = isset($a[0]) ? strtolower($a[0]) : '';
+      $id_b = isset($b[0]) ? strtolower($b[0]) : '';
+      return $id_a <=> $id_b;
+    });
+  }
+  unset($entries);
+
+  return $groups;
+}
+
+function ptcgdm_get_one_piece_set_label_overrides() {
+  return [
+    'op03' => '-PILLARS OF STRENGTH- [OP-03]',
+    'op05' => '-AWAKENING OF THE NEW ERA- [OP-05]',
+  ];
+}
+
+function ptcgdm_resolve_one_piece_set_label($set_id, $detected_label = '') {
+  $key = strtolower(trim((string) $set_id));
+  $overrides = ptcgdm_get_one_piece_set_label_overrides();
+  if ($key !== '' && isset($overrides[$key])) {
+    return $overrides[$key];
+  }
+
+  $label = trim((string) $detected_label);
+  if ($label !== '') {
+    return $label;
+  }
+
+  return strtoupper((string) $set_id);
+}
+
+function ptcgdm_extract_one_piece_set_label($path, $set_id) {
+  $content = @file_get_contents($path);
+  if ($content) {
+    $decoded = json_decode($content, true);
+    if (is_array($decoded)) {
+      $items = $decoded;
+      if (isset($decoded['data']) && is_array($decoded['data'])) {
+        $items = $decoded['data'];
+      }
+      foreach ($items as $item) {
+        if (!is_array($item)) {
+          continue;
+        }
+        if (!empty($item['set']['name'])) {
+          return ptcgdm_resolve_one_piece_set_label($set_id, $item['set']['name']);
+        }
+      }
+    }
+  }
+
+  return ptcgdm_resolve_one_piece_set_label($set_id, '');
+}
 
 
 function ptcgdm_sanitize_json_filename($filename) {
@@ -54,14 +267,34 @@ register_activation_hook(__FILE__, function () {
 });
 
 add_action('admin_menu', function () {
+  $parent_slug = 'ptcg-inventory-management';
+
   add_menu_page(
-    'PTCG Inventory',
-    'Add Inventory',
+    'Inventory Management',
+    'Inventory Management',
     'manage_options',
-    'ptcg-add-inventory',
-    'ptcgdm_render_inventory',
+    $parent_slug,
+    'ptcgdm_render_pokemon_inventory',
     'dashicons-archive',
     58
+  );
+
+  add_submenu_page(
+    $parent_slug,
+    'Pokemon Inventory',
+    'Pokemon Inventory',
+    'manage_options',
+    $parent_slug,
+    'ptcgdm_render_pokemon_inventory'
+  );
+
+  add_submenu_page(
+    $parent_slug,
+    'One Piece Inventory',
+    'One Piece Inventory',
+    'manage_options',
+    'ptcg-one-piece-inventory',
+    'ptcgdm_render_one_piece_inventory'
   );
 });
 
@@ -137,15 +370,33 @@ function ptcgdm_collect_saved_entries($dir, $url_base, array $args = []) {
   return $saved;
 }
 
-function ptcgdm_render_builder(){
+function ptcgdm_render_builder(array $config = []){
   if (!current_user_can('manage_options')) return;
+
+  $defaults = ptcgdm_get_dataset_settings('pokemon');
+  if (!is_array($config) || !$config) {
+    $config = $defaults;
+  } else {
+    $config = array_merge($defaults, $config);
+  }
+
+  $dataset_key = isset($config['key']) ? (string) $config['key'] : 'pokemon';
+  $data_url    = isset($config['data_url']) ? (string) $config['data_url'] : PTCGDM_DATA_URL;
+  $page_title  = isset($config['page_title']) ? (string) $config['page_title'] : 'PTCG Deck – Card Inventory';
+  $page_description = isset($config['page_description']) ? (string) $config['page_description'] : 'Maintain a single card inventory list using the local dataset.';
+  $default_format = isset($config['default_format']) ? (string) $config['default_format'] : 'Standard';
+  $series_config = isset($config['series_config']) && is_array($config['series_config']) ? $config['series_config'] : [];
+  $set_labels = isset($config['set_labels']) && is_array($config['set_labels']) ? $config['set_labels'] : [];
+  $set_index_paths = isset($config['set_index_paths']) && is_array($config['set_index_paths']) ? array_values(array_filter($config['set_index_paths'])) : [];
+  $supertype_options = isset($config['supertype_options']) && is_array($config['supertype_options']) ? $config['supertype_options'] : [];
+  if (!$supertype_options) {
+    $supertype_options = ['Pokémon', 'Trainer', 'Energy'];
+  }
 
   $mode = 'inventory';
 
   $dir = ptcgdm_ensure_inventory_directory();
   $url_base = ptcgdm_get_inventory_url();
-  $page_title = 'PTCG Deck – Card Inventory';
-  $page_description = 'Maintain a single card inventory list using the local dataset.';
   $load_label = 'Load Saved Inventory';
   $select_placeholder = 'Choose saved inventory…';
   $load_button_label = 'Load Inventory';
@@ -189,7 +440,7 @@ function ptcgdm_render_builder(){
     $delete_inventory_nonce  = wp_create_nonce('ptcgdm_delete_inventory_card');
   }
 
-  $data_base_url = esc_js(PTCGDM_URL . 'pokemon-tcg-data');
+  $data_base_url = esc_js($data_url);
   $script_config = wp_json_encode([
     'saveAction'          => $save_action,
     'defaultBasename'     => $default_basename,
@@ -206,10 +457,80 @@ function ptcgdm_render_builder(){
     'deleteInventoryAction' => $delete_inventory_action,
     'deleteInventoryNonce'  => $delete_inventory_nonce,
     'inventorySortDefault'  => $inventory_sort_default,
+    'seriesConfig'        => $series_config,
+    'setLabels'           => $set_labels,
+    'setIndexPaths'       => $set_index_paths,
+    'defaultFormat'       => $default_format,
+    'datasetKey'          => $dataset_key,
+    'datasetLabel'        => isset($config['label']) ? (string) $config['label'] : '',
+    'supertypeOptions'    => array_values(array_map('strval', $supertype_options)),
   ], JSON_UNESCAPED_UNICODE);
   if (!is_string($script_config)) {
     $script_config = '{}';
   }
+
+  $inventory_variant_columns = [];
+  if ($dataset_key === 'one_piece') {
+    $inventory_variant_columns[] = [
+      'key'          => 'normal',
+      'label'        => 'Normal',
+      'qty_header'   => 'Qty',
+      'price_header' => 'Price',
+    ];
+  } else {
+    $inventory_variant_columns[] = [
+      'key'          => 'normal',
+      'label'        => 'Normal',
+      'qty_header'   => 'Qty (Normal)',
+      'price_header' => 'Price (Normal)',
+    ];
+    $inventory_variant_columns[] = [
+      'key'          => 'foil',
+      'label'        => 'Foil',
+      'qty_header'   => 'Qty (Foil)',
+      'price_header' => 'Price (Foil)',
+    ];
+    $inventory_variant_columns[] = [
+      'key'          => 'reverseFoil',
+      'label'        => 'Reverse Foil',
+      'qty_header'   => 'Qty (Reverse Foil)',
+      'price_header' => 'Price (Reverse Foil)',
+    ];
+    $inventory_variant_columns[] = [
+      'key'          => 'stamped',
+      'label'        => 'Stamped',
+      'qty_header'   => 'Qty (Stamped)',
+      'price_header' => 'Price (Stamped)',
+    ];
+  }
+
+  $inventory_variant_count = count($inventory_variant_columns);
+  if ($inventory_variant_count === 0) {
+    $inventory_variant_columns[] = [
+      'key'          => 'normal',
+      'label'        => 'Normal',
+      'qty_header'   => 'Qty (Normal)',
+      'price_header' => 'Price (Normal)',
+    ];
+    $inventory_variant_count = 1;
+  }
+
+  $inventory_variant_config = [];
+  foreach ($inventory_variant_columns as $variant_column) {
+    $inventory_variant_config[] = [
+      'key'         => (string) ($variant_column['key'] ?? ''),
+      'label'       => (string) ($variant_column['label'] ?? ''),
+      'qtyHeader'   => (string) ($variant_column['qty_header'] ?? ''),
+      'priceHeader' => (string) ($variant_column['price_header'] ?? ''),
+    ];
+  }
+
+  $inventory_variant_json = wp_json_encode($inventory_variant_config, JSON_UNESCAPED_UNICODE);
+  if (!is_string($inventory_variant_json)) {
+    $inventory_variant_json = '[]';
+  }
+
+  $deck_empty_colspan = 5 + $inventory_variant_count * 2 + 1;
 ?>
   <div class="wrap">
     <h1><?php echo esc_html($page_title); ?></h1>
@@ -251,15 +572,21 @@ function ptcgdm_render_builder(){
       <div id="dbStatusRow"><strong>Status:</strong> <span id="dbStatus" class="muted">Loading local dataset…</span></div>
 
       <div class="grid4" style="margin-top:12px">
-        <div><label>Deck Name</label><input id="deckName" placeholder="My Deck"></div>
-        <div><label>Format</label><input id="deckFormat" placeholder="Standard"></div>
         <div>
           <label>Set</label>
           <select id="selSet" disabled><option value="">Loading…</option></select>
         </div>
         <div>
           <label>Supertype</label>
-          <select id="selSupertype" disabled><option value="">Choose…</option><option>Pokémon</option><option>Trainer</option><option>Energy</option></select>
+          <select id="selSupertype" disabled>
+            <option value="">Choose…</option>
+            <?php foreach ($supertype_options as $option) :
+              $option = trim((string) $option);
+              if ($option === '') continue;
+            ?>
+              <option><?php echo esc_html($option); ?></option>
+            <?php endforeach; ?>
+          </select>
         </div>
       </div>
 
@@ -269,10 +596,11 @@ function ptcgdm_render_builder(){
         </div>
       </div>
 
+      <?php if ($dataset_key !== 'one_piece') : ?>
       <div style="margin-top:16px">
         <label for="bulkInput">Bulk Add by Code</label>
-        <textarea id="bulkInput" class="bulk-input" rows="8" placeholder="4 Gholdengo ex PAR 139&#10;3 Pokégear 3.0 SVI 186&#10;2 Rare Candy SUM 129" spellcheck="false"></textarea>
-        <p class="description">Enter one card per line using “Qty Name SET Number”. Examples: <code>4 Gholdengo ex PAR 139</code>, <code>2 Rare Candy SUM 129</code></p>
+        <textarea id="bulkInput" class="bulk-input" rows="8" placeholder="Abra;MEG;054/132;Psychic;34;5;0&#10;Charizard;BS;004/102;Fire;1;0;0" spellcheck="false"></textarea>
+        <p class="description">Enter one card per line using “Name;Set;ID;Type;Normal;Foil;Reverse”. Example: <code>Abra;MEG;054/132;Psychic;34;5;0</code></p>
         <div class="bulk-actions">
           <button id="btnBulkAdd" class="btn secondary" disabled>Add cards</button>
           <button id="btnClearDeck" class="btn danger" disabled><?php echo esc_html($clear_button_label); ?></button>
@@ -280,6 +608,7 @@ function ptcgdm_render_builder(){
           <div id="bulkStatus" class="muted bulk-status"></div>
         </div>
       </div>
+      <?php endif; ?>
 
       <div class="row" style="margin-top:12px;align-items:flex-end">
         <div style="flex:1 1 600px"><label>Name (type to filter)</label><input id="nameInput" placeholder="e.g., Pikachu, Nest Ball"></div>
@@ -292,7 +621,27 @@ function ptcgdm_render_builder(){
 
       <h3 style="margin:16px 0 8px"><?php echo esc_html($section_heading); ?></h3>
       <div style="overflow:auto">
-        <table id="deckTable"><thead><tr><th>#</th><th>Name</th><th>Set</th><th>No.</th><th>Supertype</th><th>Qty (Normal)</th><th>Price (Normal)</th><th>Qty (Foil)</th><th>Price (Foil)</th><th>Qty (Reverse Foil)</th><th>Price (Reverse Foil)</th><th>Qty (Stamped)</th><th>Price (Stamped)</th><th>Actions</th></tr></thead><tbody id="deckBody"><tr><td colspan="14" class="muted">No cards yet.</td></tr></tbody></table>
+        <table id="deckTable">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Name</th>
+              <th>Set</th>
+              <th>No.</th>
+              <th>Supertype</th>
+              <?php foreach ($inventory_variant_columns as $variant_column) : ?>
+                <th><?php echo esc_html($variant_column['qty_header']); ?></th>
+                <th><?php echo esc_html($variant_column['price_header']); ?></th>
+              <?php endforeach; ?>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="deckBody">
+            <tr>
+              <td colspan="<?php echo esc_attr($deck_empty_colspan); ?>" class="muted">No cards yet.</td>
+            </tr>
+          </tbody>
+        </table>
       </div>
 
       <div class="row" style="margin-top:12px;align-items:center;justify-content:space-between">
@@ -313,7 +662,27 @@ function ptcgdm_render_builder(){
         </div>
       </div>
       <div style="overflow:auto">
-        <table id="inventoryDataTable"><thead><tr><th>#</th><th>Name</th><th>Set</th><th>No.</th><th>Supertype</th><th>Qty (Normal)</th><th>Price (Normal)</th><th>Qty (Foil)</th><th>Price (Foil)</th><th>Qty (Reverse Foil)</th><th>Price (Reverse Foil)</th><th>Qty (Stamped)</th><th>Price (Stamped)</th><th>Actions</th></tr></thead><tbody id="inventoryDataBody"><tr><td colspan="14" class="muted">No inventory saved yet.</td></tr></tbody></table>
+        <table id="inventoryDataTable">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Name</th>
+              <th>Set</th>
+              <th>No.</th>
+              <th>Supertype</th>
+              <?php foreach ($inventory_variant_columns as $variant_column) : ?>
+                <th><?php echo esc_html($variant_column['qty_header']); ?></th>
+                <th><?php echo esc_html($variant_column['price_header']); ?></th>
+              <?php endforeach; ?>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="inventoryDataBody">
+            <tr>
+              <td colspan="<?php echo esc_attr($deck_empty_colspan); ?>" class="muted">No inventory saved yet.</td>
+            </tr>
+          </tbody>
+        </table>
       </div>
 
       <div class="row" style="margin-top:12px;align-items:center;justify-content:flex-end">
@@ -346,31 +715,95 @@ function ptcgdm_render_builder(){
       const IS_INVENTORY = true;
       const INVENTORY_BUFFER_MIN = -999;
       const INVENTORY_BUFFER_MAX = 999;
-      const INVENTORY_VARIANTS = [
-        { key: 'normal', label: 'Normal' },
-        { key: 'foil', label: 'Foil' },
-        { key: 'reverseFoil', label: 'Reverse Foil' },
-        { key: 'stamped', label: 'Stamped' },
-      ];
+      const INVENTORY_VARIANTS = <?php echo $inventory_variant_json; ?>;
       const INVENTORY_SAVED_EMPTY_COLSPAN = 5 + INVENTORY_VARIANTS.length * 2 + 1;
       const INVENTORY_NUMERIC_COLLATOR = (typeof Intl !== 'undefined' && typeof Intl.Collator === 'function')
         ? new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' })
         : null;
 
-      const SERIES_CONFIG = {
+      const DATASET_KEY = typeof SAVE_CONFIG.datasetKey === 'string' ? SAVE_CONFIG.datasetKey : 'pokemon';
+      const DATASET_LABEL = typeof SAVE_CONFIG.datasetLabel === 'string' ? SAVE_CONFIG.datasetLabel.trim() : '';
+      const IS_ONE_PIECE = DATASET_KEY === 'one_piece';
+      const RAW_SET_LABELS = (SAVE_CONFIG.setLabels && typeof SAVE_CONFIG.setLabels === 'object' && !Array.isArray(SAVE_CONFIG.setLabels)) ? SAVE_CONFIG.setLabels : {};
+      const SET_LABELS = {};
+      Object.entries(RAW_SET_LABELS).forEach(([key, value]) => {
+        const id = String(key || '').trim().toLowerCase();
+        const label = String(value || '').trim();
+        if (!id || !label) return;
+        if (!SET_LABELS[id]) {
+          SET_LABELS[id] = label;
+        }
+      });
+
+      const DEFAULT_SERIES_CONFIG = {
         'Sun & Moon': ['smp','sm1','sm2','sm3','sm35','sm4','sm5','sm6','sm7','sm75','sm8','sm9','det1','sm10','sm11','sm115','sma','sm12'],
         'Sword & Shield': ['swshp','swsh1','swsh2','swsh3','swsh35','swsh4','swsh45','swsh45sv','swsh5','swsh6','swsh7','swsh8','swsh9','swsh9tg','swsh10','swsh10tg','pgo','swsh11','swsh11tg','swsh12','swsh12tg','swsh12pt5','swsh12pt5gg'],
         'Scarlet & Violet': ['svp','sve','sv1','sv2','sv3','sv3pt5','sv4','sv4pt5','sv5','sv6','sv6pt5','sv7','sv8','sv8pt5','sv9','sv10','zsv10pt5','rsv10pt5'],
         'Mega Evolution': ['me1']
       };
 
+      const SERIES_CONFIG = (SAVE_CONFIG.seriesConfig && typeof SAVE_CONFIG.seriesConfig === 'object' && !Array.isArray(SAVE_CONFIG.seriesConfig))
+        ? SAVE_CONFIG.seriesConfig
+        : DEFAULT_SERIES_CONFIG;
+
+      function normaliseGroupEntries(entries) {
+        if (!Array.isArray(entries)) return [];
+        const result = [];
+        entries.forEach(entry => {
+          let id = '';
+          let label = '';
+          if (Array.isArray(entry)) {
+            id = entry[0];
+            label = entry.length > 1 ? entry[1] : '';
+          } else if (entry && typeof entry === 'object') {
+            id = entry.id;
+            label = entry.label || '';
+          } else {
+            id = entry;
+          }
+          id = String(id || '').trim().toLowerCase();
+          label = String(label || '').trim();
+          if (!id) {
+            return;
+          }
+          if (label && !SET_LABELS[id]) {
+            SET_LABELS[id] = label;
+          }
+          result.push([id, label]);
+        });
+        return result;
+      }
+
       const ALLOWED_GROUPS = Object.fromEntries(
-        Object.entries(SERIES_CONFIG).map(([series, ids]) => [
-          series,
-          ids.map(id => [id, ''])
-        ])
+        Object.entries(SERIES_CONFIG)
+          .map(([series, entries]) => [series, normaliseGroupEntries(entries)])
+          .filter(([, entries]) => entries.length)
       );
-      const ALLOWED_SET_IDS = new Set(Object.values(ALLOWED_GROUPS).flat().map(([id])=>id));
+
+      const ALLOWED_SET_IDS = new Set();
+      Object.values(ALLOWED_GROUPS).forEach(entries => {
+        entries.forEach(([id]) => {
+          if (id) {
+            ALLOWED_SET_IDS.add(id);
+          }
+        });
+      });
+
+      function makeDatasetUrl(path) {
+        if (path === null || path === undefined) {
+          return '';
+        }
+        let value = String(path);
+        if (!value) {
+          return '';
+        }
+        if (/^https?:/i.test(value)) {
+          return value;
+        }
+        const base = DATA_BASE.replace(/\/+$/, '');
+        value = value.replace(/^\/+/, '');
+        return `${base}/${value}`;
+      }
 
       const byId = new Map();
       const setCodeLookup = new Map();
@@ -426,6 +859,36 @@ function ptcgdm_render_builder(){
       }
 
       let isSavingDeck = false;
+      let deckNameState = typeof SAVE_CONFIG.defaultEntryName === 'string' ? SAVE_CONFIG.defaultEntryName : '';
+      let deckFormatState = typeof SAVE_CONFIG.defaultFormat === 'string' ? SAVE_CONFIG.defaultFormat : '';
+
+      function getDeckNameValue(){
+        if (els.deckName && typeof els.deckName.value === 'string') {
+          deckNameState = els.deckName.value;
+        }
+        return (deckNameState || '').trim();
+      }
+
+      function setDeckNameValue(value){
+        deckNameState = typeof value === 'string' ? value : '';
+        if (els.deckName) {
+          els.deckName.value = deckNameState;
+        }
+      }
+
+      function getDeckFormatValue(){
+        if (els.deckFormat && typeof els.deckFormat.value === 'string') {
+          deckFormatState = els.deckFormat.value;
+        }
+        return (deckFormatState || '').trim();
+      }
+
+      function setDeckFormatValue(value){
+        deckFormatState = typeof value === 'string' ? value : '';
+        if (els.deckFormat) {
+          els.deckFormat.value = deckFormatState;
+        }
+      }
 
       function clampBufferQty(value){
         if(IS_INVENTORY){
@@ -531,6 +994,41 @@ function ptcgdm_render_builder(){
         return out;
       }
 
+      function createDeckEntryFromSaved(cardId){
+        if(!IS_INVENTORY || !cardId) return null;
+        const saved = inventorySavedMap.get(cardId);
+        if(!saved || typeof saved !== 'object') return null;
+        const variantsSource = saved.variants && typeof saved.variants === 'object' ? saved.variants : {};
+        const entry = { id: cardId, variants: {} };
+        let hasData = false;
+        INVENTORY_VARIANTS.forEach(({ key })=>{
+          const source = variantsSource[key];
+          if(source && source.qty !== undefined){
+            const parsedQty = clampBufferQty(source.qty);
+            if(Number.isFinite(parsedQty) && parsedQty > 0){
+              hasData = true;
+            }
+          }
+          let priceValue = null;
+          if(source && source.price !== undefined){
+            const parsedPrice = parsePriceValue(source.price);
+            if(Number.isFinite(parsedPrice)){
+              priceValue = parsedPrice;
+              hasData = true;
+            }
+          }
+          entry.variants[key] = {
+            qty: 0,
+            price: Number.isFinite(priceValue) ? priceValue : null,
+          };
+        });
+        if(!hasData){
+          return null;
+        }
+        sumInventoryVariantQuantities(entry);
+        return entry;
+      }
+
       function sumInventoryVariantQuantities(entry){
         if(!entry) return 0;
         const variants = entry.variants && typeof entry.variants === 'object' ? entry.variants : {};
@@ -610,10 +1108,24 @@ function ptcgdm_render_builder(){
         els.nameInput.addEventListener('keydown', e=>{ if(e.key==='Enter'){ e.preventDefault(); addFirstMatch(); }});
         els.selQty.addEventListener('input', ()=>updateAddButton(0));
         els.btnAdd.addEventListener('click', addFirstMatch);
-        els.btnClearDeck.addEventListener('click', clearDeck);
-        els.btnSaveDeck.addEventListener('click', saveDeck);
-        els.deckName.addEventListener('input', updateJSON);
-        els.deckFormat.addEventListener('input', updateJSON);
+        if (els.btnClearDeck) {
+          els.btnClearDeck.addEventListener('click', clearDeck);
+        }
+        if (els.btnSaveDeck) {
+          els.btnSaveDeck.addEventListener('click', saveDeck);
+        }
+        if (els.deckName) {
+          els.deckName.addEventListener('input', ()=>{
+            deckNameState = typeof els.deckName.value === 'string' ? els.deckName.value : '';
+            updateJSON();
+          });
+        }
+        if (els.deckFormat) {
+          els.deckFormat.addEventListener('input', ()=>{
+            deckFormatState = typeof els.deckFormat.value === 'string' ? els.deckFormat.value : '';
+            updateJSON();
+          });
+        }
         if (els.bulkInput) {
           els.bulkInput.addEventListener('input', updateBulkAddState);
         }
@@ -660,12 +1172,15 @@ function ptcgdm_render_builder(){
         for (const [group, arr] of Object.entries(ALLOWED_GROUPS)){
           const ids = arr.map(([id])=>id);
           const metas = await Promise.all(ids.map(id=>getSetMetadata(id)));
-          const items = ids.map((id, idx)=>{
+          const items = arr.map(([id, fallbackLabel], idx)=>{
             const meta = metas[idx];
-            const label = meta?.name || 'Unknown Set';
-            return `<option value="${esc(id)}">${esc(label)}</option>`;
+            const key = String(id || '').toLowerCase();
+            const resolvedLabel = (fallbackLabel && fallbackLabel.trim()) || SET_LABELS[key] || (meta && typeof meta.name === 'string' ? meta.name : '') || 'Unknown Set';
+            return `<option value="${esc(id)}">${esc(resolvedLabel)}</option>`;
           }).join('');
-          opt.push(`<optgroup label="${esc(group)}">${items}</optgroup>`);
+          if (items) {
+            opt.push(`<optgroup label="${esc(group)}">${items}</optgroup>`);
+          }
         }
         els.selSet.innerHTML=opt.join('');
         els.selSet.disabled=false; els.selSupertype.disabled=false;
@@ -677,7 +1192,20 @@ function ptcgdm_render_builder(){
         await Promise.all(Array.from({length:8}, worker));
       }
       async function loadSet(setId){
-        const paths=[`${DATA_BASE}/cards/en/${setId}.json`,`${DATA_BASE}/cards/${setId}.json`,`${DATA_BASE}/${setId}.json`];
+        const originalId = String(setId || '').trim();
+        if(!originalId) return 0;
+        const canonicalId = originalId.toLowerCase();
+        const idVariants = Array.from(new Set([
+          canonicalId,
+          originalId,
+          originalId.toUpperCase()
+        ].filter(Boolean)));
+        const paths=[];
+        idVariants.forEach(idVariant=>{
+          paths.push(`${DATA_BASE}/cards/en/${idVariant}.json`);
+          paths.push(`${DATA_BASE}/cards/${idVariant}.json`);
+          paths.push(`${DATA_BASE}/${idVariant}.json`);
+        });
         for(const url of paths){
           try{
             const r=await fetch(url,{cache:'no-cache'}); if(!r.ok) continue;
@@ -689,9 +1217,38 @@ function ptcgdm_render_builder(){
             let added=0;
             for(const c of arr){
               if(!c?.id) continue;
-              hydrateCardSet(c, setId, setMeta);
-              registerCardNumberIndex(setId, c);
-              registerCardNameIndex(setId, c);
+              hydrateCardSet(c, canonicalId, setMeta);
+              if(!c.supertype && c.type){
+                c.supertype = c.type;
+              }
+              if(!c.number){
+                const source = c.code || c.id || '';
+                if(source){
+                  const parts = String(source).split('-');
+                  const tail = parts.length > 1 ? parts[parts.length - 1] : parts[0];
+                  if(tail){
+                    c.number = tail;
+                  }
+                }
+              }
+              if(c.set && typeof c.set === 'object'){
+                c.set.id = String(c.set.id || canonicalId || '').trim().toLowerCase();
+                if(c.set.id && !c.set.name){
+                  const label = SET_LABELS[c.set.id];
+                  if(label){
+                    c.set.name = label;
+                  }
+                }
+              } else {
+                c.set = { id: canonicalId };
+                const label = SET_LABELS[canonicalId];
+                if(label){
+                  c.set.name = label;
+                }
+              }
+              applyDatasetSpecificCardAdjustments(c);
+              registerCardNumberIndex(canonicalId, c);
+              registerCardNameIndex(canonicalId, c);
               byId.set(c.id,c);
               added++;
             }
@@ -713,11 +1270,18 @@ function ptcgdm_render_builder(){
 
       async function loadSetIndex(){
         if(setIndexPromise) return setIndexPromise;
-        const paths=[
-          `${DATA_BASE}/sets/en.json`,
-          `${DATA_BASE}/sets.json`,
-          `${DATA_BASE}/sets/all.json`
-        ];
+        const customIndexPaths = Array.isArray(SAVE_CONFIG.setIndexPaths) ? SAVE_CONFIG.setIndexPaths : [];
+        const rawPaths = [...customIndexPaths, 'sets/en.json', 'sets.json', 'sets/all.json'];
+        const paths = [];
+        const seen = new Set();
+        rawPaths.forEach(path => {
+          const full = makeDatasetUrl(path);
+          if (!full || seen.has(full)) {
+            return;
+          }
+          seen.add(full);
+          paths.push(full);
+        });
         setIndexPromise = (async()=>{
           for(const url of paths){
             try{
@@ -761,7 +1325,17 @@ function ptcgdm_render_builder(){
         const current=card.set && typeof card.set==='object' ? { ...card.set } : {};
         const info=meta && typeof meta==='object' ? { ...meta } : {};
         const merged={ ...info, ...current };
-        merged.id = merged.id || info.id || setId || '';
+        const resolvedId = merged.id || info.id || setId || '';
+        const canonicalId = String(resolvedId || '').trim().toLowerCase();
+        if (canonicalId) {
+          merged.id = canonicalId;
+          if (!merged.name) {
+            const label = SET_LABELS[canonicalId];
+            if (label) {
+              merged.name = label;
+            }
+          }
+        }
         if(info.images || current.images){
           merged.images = { ...(info.images || {}), ...(current.images || {}) };
         }
@@ -777,9 +1351,13 @@ function ptcgdm_render_builder(){
         if(!keyBase) return;
         const cardId = card.id;
         if(!cardId) return;
-        const variants = normaliseNumberVariants(card.number);
-        if(!variants.length) return;
+        const variants = new Set(normaliseNumberVariants(card.number));
+        if(DATASET_KEY === 'one_piece'){
+          normaliseNumberVariants(card.displayNumber).forEach(variant => variants.add(variant));
+        }
+        if(!variants.size) return;
         variants.forEach(variant => {
+          if(!variant) return;
           const key = `${keyBase}|${variant}`;
           if(!setNumberIndex.has(key)){
             setNumberIndex.set(key, cardId);
@@ -791,12 +1369,22 @@ function ptcgdm_render_builder(){
         if(!setId || !card?.id) return;
         const keyBase = makeSetKey(setId);
         if(!keyBase) return;
+        const allNames = new Set();
         const nameKey = makeNameKey(card.name);
-        if(!nameKey) return;
-        const key = `${keyBase}|${nameKey}`;
-        if(!setNameIndex.has(key)){
-          setNameIndex.set(key, card.id);
+        if(nameKey) allNames.add(nameKey);
+        if(Array.isArray(card.extraNameKeys)){
+          card.extraNameKeys.forEach(extra => {
+            const extraKey = makeNameKey(extra);
+            if(extraKey) allNames.add(extraKey);
+          });
         }
+        allNames.forEach(entry => {
+          if(!entry) return;
+          const key = `${keyBase}|${entry}`;
+          if(!setNameIndex.has(key)){
+            setNameIndex.set(key, card.id);
+          }
+        });
       }
 
       function normaliseNumberVariants(value){
@@ -805,6 +1393,20 @@ function ptcgdm_render_builder(){
         const base = raw.replace(/\s+/g,'').toLowerCase();
         if(!base) return [];
         const variants = new Set([base]);
+        const collapsed = base.replace(/[_-]+/g,'');
+        if(collapsed && collapsed !== base){
+          variants.add(collapsed);
+        }
+        if(DATASET_KEY === 'one_piece'){
+          const altVariant = collapsed.replace(/p1\b/, ONE_PIECE_VARIANT_LABELS.p1.replace(/\s+/g,'').toLowerCase()).replace(/p2\b/, ONE_PIECE_VARIANT_LABELS.p2.replace(/\s+/g,'').toLowerCase());
+          if(altVariant && altVariant !== collapsed){
+            variants.add(altVariant);
+          }
+          const strippedVariant = collapsed.replace(/p[12]\b/, '');
+          if(strippedVariant && strippedVariant !== collapsed){
+            variants.add(strippedVariant);
+          }
+        }
         if(/^\d+$/.test(base)){
           const intVal = parseInt(base, 10);
           if(!Number.isNaN(intVal)) variants.add(String(intVal));
@@ -835,16 +1437,103 @@ function ptcgdm_render_builder(){
         return base;
       }
 
+      const ONE_PIECE_VARIANT_LABELS = {
+        p1: 'Alt Art',
+        p2: 'Special Art',
+      };
+
+      function detectOnePieceVariantKey(id){
+        if(!id) return '';
+        const lower = String(id).toLowerCase();
+        if(/(?:_|-)p2\b/.test(lower)) return 'p2';
+        if(/(?:_|-)p1\b/.test(lower)) return 'p1';
+        return '';
+      }
+
+      function normaliseOnePieceVariantDisplay(value){
+        if(value === null || value === undefined) return '';
+        let result = String(value);
+        if(!result) return '';
+        result = result.replace(/[_\s-]*p2\b/gi, ` ${ONE_PIECE_VARIANT_LABELS.p2}`);
+        result = result.replace(/[_\s-]*p1\b/gi, ` ${ONE_PIECE_VARIANT_LABELS.p1}`);
+        result = result.replace(/\bp2\b/gi, ONE_PIECE_VARIANT_LABELS.p2);
+        result = result.replace(/\bp1\b/gi, ONE_PIECE_VARIANT_LABELS.p1);
+        result = result.replace(/\s{2,}/g, ' ');
+        result = result.replace(/\s*-\s*/g, ' - ');
+        result = result.replace(/\s*,\s*/g, ', ');
+        return result.trim();
+      }
+
+      function applyDatasetSpecificCardAdjustments(card){
+        if(DATASET_KEY !== 'one_piece' || !card || !card.id) return;
+        const variantKey = detectOnePieceVariantKey(card.id);
+        const variantLabel = variantKey ? ONE_PIECE_VARIANT_LABELS[variantKey] : '';
+        const baseName = typeof card.name === 'string' ? card.name.trim() : '';
+        const replacedName = baseName ? normaliseOnePieceVariantDisplay(baseName) : '';
+        let displayName = baseName;
+        if(replacedName) {
+          displayName = replacedName;
+        }
+        if(displayName && variantLabel && !new RegExp(`\\b${variantLabel}\\b`, 'i').test(displayName)){
+          displayName = `${displayName} ${variantLabel}`.replace(/\s+/g, ' ').trim();
+        }
+        if(displayName && displayName !== baseName){
+          card.displayName = displayName;
+        }
+        const extraNames = new Set(Array.isArray(card.extraNameKeys) ? card.extraNameKeys : []);
+        if(replacedName && replacedName !== baseName) extraNames.add(replacedName);
+        if(displayName && displayName !== baseName) extraNames.add(displayName);
+        if(extraNames.size){
+          card.extraNameKeys = Array.from(extraNames);
+        }
+        const originalNumber = typeof card.number === 'string' && card.number ? card.number : '';
+        const derivedNumberSource = originalNumber || (card.code ? String(card.code) : '');
+        const displayNumber = normaliseOnePieceVariantDisplay(derivedNumberSource);
+        if(displayNumber && displayNumber !== originalNumber){
+          card.displayNumber = displayNumber;
+        }
+      }
+
+      function getCardDisplayName(card){
+        if(!card) return '';
+        const display = typeof card.displayName === 'string' ? card.displayName.trim() : '';
+        if(display) return display;
+        const base = typeof card.name === 'string' ? card.name.trim() : '';
+        return base;
+      }
+
+      function getCardDisplayNumber(card){
+        if(!card) return '';
+        const display = typeof card.displayNumber === 'string' ? card.displayNumber.trim() : '';
+        if(display) return display;
+        if(card.number !== undefined && card.number !== null){
+          return String(card.number).trim();
+        }
+        return '';
+      }
+
+      function getCardSearchName(card){
+        const display = getCardDisplayName(card);
+        if(display) return norm(display);
+        return norm(card?.name || '');
+      }
+
       function registerSetMeta(meta){
         if(!meta || typeof meta !== 'object') return;
-        const setId = String(meta.id || '').trim();
-        if(!setId) return;
+        const rawId = String(meta.id || '').trim();
+        if(!rawId) return;
+        const setId = rawId.toLowerCase();
+        meta.id = setId;
+        const metaName = typeof meta.name === 'string' ? meta.name.trim() : '';
+        if(metaName && !SET_LABELS[setId]){
+          SET_LABELS[setId] = metaName;
+        }
         const variants = new Set();
-        const upperId = setId.toUpperCase();
+        const upperId = rawId.toUpperCase();
         variants.add(upperId);
         variants.add(upperId.replace(/\s+/g,''));
         variants.add(upperId.replace(/-/g,''));
-        const lowerId = setId.toLowerCase();
+        const lowerId = setId;
         variants.add(lowerId.toUpperCase());
         variants.add(lowerId.replace(/\s+/g,'').toUpperCase());
         variants.add(lowerId.replace(/-/g,'').toUpperCase());
@@ -876,7 +1565,12 @@ function ptcgdm_render_builder(){
 
       function getCardSetLabel(card){
         const name = (card?.set?.name || '').trim();
-        return name || 'Unknown Set';
+        if(name) return name;
+        const setId = String(card?.set?.id || '').trim().toLowerCase();
+        if(setId && SET_LABELS[setId]){
+          return SET_LABELS[setId];
+        }
+        return 'Unknown Set';
       }
 
       function updateResults(){
@@ -885,20 +1579,21 @@ function ptcgdm_render_builder(){
         if(!setId || !sup){ els.filterCount.textContent='Pick set & supertype.'; els.results.innerHTML=''; els.btnAdd.disabled=true; return; }
         const supKey=norm(sup);
         const base=[]; for(const c of byId.values()){ if(c?.set?.id===setId && norm(c?.supertype)===supKey) base.push(c); }
-        const list=q? base.filter(c=>norm(c.name).includes(q)) : base;
+        const list=q? base.filter(c=>getCardSearchName(c).includes(q)) : base;
         list.sort((a,b)=> numKey(a)-numKey(b) || String(a.number||'').localeCompare(String(b.number||''), undefined, {numeric:true, sensitivity:'base'}));
         const MAX=200, shown=list.slice(0,MAX);
         els.filterCount.textContent=`${list.length} cards`+(list.length>MAX?` (showing ${MAX})`:'');
         const resultHTML = shown.map(c=>{
-          const number = String(c.number||'').trim();
+          const number = getCardDisplayNumber(c);
           const setLabel = getCardSetLabel(c);
           const metaParts = [];
           if(number) metaParts.push(`#${number}`);
           if(setLabel) metaParts.push(setLabel);
           const meta = metaParts.map(part=>esc(part)).join(' • ');
+          const displayName = getCardDisplayName(c) || c?.name || c?.id || '';
           return `
           <div class="result">
-            <div><div class="name">${esc(c.name)}</div><div class="muted">${meta}</div></div>
+            <div><div class="name">${esc(displayName)}</div><div class="muted">${meta}</div></div>
             <div><span class="chip">${esc(c.supertype||'')}</span></div>
             <div><button class="btn secondary" data-id="${esc(c.id)}">Add</button></div>
           </div>`;
@@ -912,7 +1607,7 @@ function ptcgdm_render_builder(){
       function addFirstMatch(){
         const setId=els.selSet.value, sup=norm(els.selSupertype.value), q=norm(els.nameInput.value);
         const base=[]; for(const c of byId.values()){ if(c?.set?.id===setId && norm(c?.supertype)===sup) base.push(c); }
-        const list=q? base.filter(c=>norm(c.name).includes(q)) : base;
+        const list=q? base.filter(c=>getCardSearchName(c).includes(q)) : base;
         if(list.length===1) addCard(list[0].id);
         else if(list.length===0) alert('No match.');
         else alert('Multiple matches — click Add on the exact row.');
@@ -935,7 +1630,7 @@ function ptcgdm_render_builder(){
           processed++;
           const parsed = parseBulkLine(trimmed);
           if(!parsed){
-            errors.push(`Line ${idx+1}: Expected “Qty Name SET Number”.`);
+            errors.push(`Line ${idx+1}: Expected “Name;Set;ID;Type;Normal;Foil;Reverse”.`);
             return;
           }
           if(parsed.error){
@@ -965,27 +1660,27 @@ function ptcgdm_render_builder(){
             return;
           }
           const card = byId.get(cardId);
-          const delta = applyDeckQuantity(cardId, parsed.qty);
+          const delta = applyDeckQuantity(cardId, parsed.qty, parsed.variantQuantities);
           if(delta === null){
             errors.push(`Line ${idx+1}: Unable to add card.`);
             return;
           }
-          if(delta === 0){
-            const maxLabel = parsed.searchByName ? (card?.name || parsed.resolvedName || parsed.name || parsed.setCodeDisplay) : `${parsed.setCodeDisplay} ${parsed.numberDisplay}`;
-            errors.push(`Line ${idx+1}: ${maxLabel} already at maximum quantity.`);
-            return;
-          }
-          totalAdded += delta;
-          const cardName = card?.name || parsed.resolvedName || parsed.name || `${parsed.setCodeDisplay} ${parsed.numberDisplay}`;
-          const numberDisplay = card?.number ? String(card.number).toUpperCase() : (parsed.searchByName ? '' : parsed.numberDisplay);
-          successes.push({qty: delta, name: cardName, code: parsed.setCodeDisplay, number: numberDisplay});
+            if(delta === 0){
+              const maxLabel = parsed.searchByName ? (getCardDisplayName(card) || parsed.resolvedName || parsed.name || parsed.setCodeDisplay) : `${parsed.setCodeDisplay} ${parsed.numberDisplay}`;
+              errors.push(`Line ${idx+1}: ${maxLabel} already at maximum quantity.`);
+              return;
+            }
+            totalAdded += delta;
+            const cardName = getCardDisplayName(card) || parsed.resolvedName || parsed.name || `${parsed.setCodeDisplay} ${parsed.numberDisplay}`;
+            const numberDisplay = getCardDisplayNumber(card) || (parsed.searchByName ? '' : parsed.numberDisplay);
+            successes.push({qty: delta, name: cardName, code: parsed.setCodeDisplay, number: numberDisplay});
         });
         if(totalAdded > 0){
           renderDeckTable();
           updateJSON();
         }
         if(processed === 0){
-          setBulkStatus('Enter one card per line using “Qty Name SET Number”.', true);
+          setBulkStatus('Enter one card per line using “Name;Set;ID;Type;Normal;Foil;Reverse”.', true);
           updateBulkAddState();
           return;
         }
@@ -1013,7 +1708,69 @@ function ptcgdm_render_builder(){
 
       function parseBulkLine(line){
         if(!line) return null;
-        const parts = line.trim().split(/\s+/);
+        const trimmedLine = line.trim();
+        if(!trimmedLine) return null;
+        if(IS_INVENTORY){
+          const segments = trimmedLine.split(';');
+          if(segments.length < 4) return { error: 'Expected “Name;Set;ID;Type;Normal;Foil;Reverse”.' };
+          const parts = segments.map(part => part.trim());
+          const [nameRaw, setTokenRaw, numberTokenRaw, typeRaw, ...quantityTokens] = parts;
+          const name = String(nameRaw || '').trim();
+          if(!name) return { error: 'Missing card name.' };
+          const energyInfo = resolveBasicEnergyInfo(name);
+          const setClean = String(setTokenRaw || '').trim();
+          const numberClean = String(numberTokenRaw || '').trim();
+          const sanitisedSet = setClean.replace(/[^0-9a-zA-Z-]+/g,'');
+          const sanitisedNumber = numberClean.replace(/[^0-9a-zA-Z\/+-]+/g,'');
+          if(!sanitisedSet) return { error: 'Missing set code.' };
+          if(!sanitisedNumber) return { error: 'Missing card number.' };
+          const variantQuantities = {};
+          let totalQty = 0;
+          const maxVariants = INVENTORY_VARIANTS.length;
+          const extraTokens = quantityTokens.slice(maxVariants);
+          if(extraTokens.some(token => String(token || '').trim() !== '')){
+            return { error: `Too many quantity values. Expected ${maxVariants}.` };
+          }
+          let quantityError = null;
+          INVENTORY_VARIANTS.forEach(({ key, label }, idx)=>{
+            if(quantityError) return;
+            const token = quantityTokens[idx];
+            if(token === undefined || token === null) return;
+            const normalised = String(token).trim();
+            if(normalised === '') return;
+            if(!/^[-+]?\d+(?:\.\d*)?$/.test(normalised)){
+              quantityError = `Invalid quantity for ${label || key}.`;
+              return;
+            }
+            const parsedQty = parseInt(normalised, 10);
+            if(Number.isNaN(parsedQty) || parsedQty < 0){
+              quantityError = `${label || key} quantity must be zero or greater.`;
+              return;
+            }
+            if(parsedQty > 0){
+              variantQuantities[key] = parsedQty;
+              totalQty += parsedQty;
+            }
+          });
+          if(quantityError){
+            return { error: quantityError };
+          }
+          if(!totalQty) return { error: 'At least one quantity must be greater than zero.' };
+          return {
+            qty: totalQty,
+            name,
+            resolvedName: energyInfo?.displayName || name,
+            setCode: sanitisedSet,
+            setCodeDisplay: sanitisedSet.toUpperCase(),
+            number: sanitisedNumber,
+            numberDisplay: sanitisedNumber.toUpperCase(),
+            searchByName: !!energyInfo,
+            searchNames: energyInfo?.searchNames || [],
+            variantQuantities,
+            cardType: String(typeRaw || '').trim(),
+          };
+        }
+        const parts = trimmedLine.split(/\s+/);
         if(parts.length < 3) return { error: 'Expected quantity, card name, set code, and number.' };
         const qtyToken = parts.shift();
         if(!/^\d+$/.test(qtyToken || '')) return { error: 'Line must start with the quantity.' };
@@ -1027,7 +1784,7 @@ function ptcgdm_render_builder(){
         const setClean = String(setTokenRaw || '').trim();
         const numberClean = String(numberTokenRaw || '').trim();
         const sanitisedSet = setClean.replace(/[^0-9a-zA-Z-]+/g,'');
-        const sanitisedNumber = numberClean.replace(/[^0-9a-zA-Z]+/g,'');
+        const sanitisedNumber = numberClean.replace(/[^0-9a-zA-Z\/+-]+/g,'');
         if(!sanitisedSet) return { error: 'Missing set code.' };
         if(!sanitisedNumber) return { error: 'Missing card number.' };
         return {
@@ -1153,9 +1910,9 @@ function ptcgdm_render_builder(){
         if(!targets.length) return '';
         let bestId='';
         let bestScore=Infinity;
-        for(const card of byId.values()){
-          if(!card || card?.set?.id !== setId) continue;
-          const cardNorm = normaliseSimilarityName(card?.name);
+          for(const card of byId.values()){
+            if(!card || card?.set?.id !== setId) continue;
+            const cardNorm = normaliseSimilarityName(getCardDisplayName(card) || card?.name);
           if(!cardNorm) continue;
           for(const target of targets){
             const score = computeNameSimilarityScore(cardNorm, target.norm);
@@ -1210,21 +1967,53 @@ function ptcgdm_render_builder(){
         if(delta !== 0){ renderDeckTable(); updateJSON(); }
       }
 
-      function applyDeckQuantity(id, qty){
+      function applyDeckQuantity(id, qty, variantQuantities){
         if(!id) return null;
         const safeQty = IS_INVENTORY ? clampBufferQty(qty) : Math.max(1, Math.min(60, parseInt(qty, 10) || 1));
+        const hasVariantQuantities = IS_INVENTORY && variantQuantities && typeof variantQuantities === 'object';
+        const variantDeltas = {};
+        let requestedVariantTotal = 0;
+        if(hasVariantQuantities){
+          INVENTORY_VARIANTS.forEach(({ key })=>{
+            if(!Object.prototype.hasOwnProperty.call(variantQuantities, key)) return;
+            const rawValue = parseInt(variantQuantities[key], 10);
+            if(!Number.isFinite(rawValue) || rawValue <= 0) return;
+            const safeValue = clampBufferQty(rawValue);
+            if(!Number.isFinite(safeValue) || safeValue <= 0) return;
+            variantDeltas[key] = safeValue;
+            requestedVariantTotal += safeValue;
+          });
+        }
         if(deckMap.has(id)){
           const idx = deckMap.get(id);
           if(idx === undefined) return null;
           if(IS_INVENTORY){
             const entry = deck[idx];
+            if(requestedVariantTotal > 0){
+              let totalApplied = 0;
+              INVENTORY_VARIANTS.forEach(({ key })=>{
+                if(!Object.prototype.hasOwnProperty.call(variantDeltas, key)) return;
+                const deltaValue = variantDeltas[key];
+                const variant = getInventoryVariant(entry, key);
+                const current = Number.isFinite(variant.qty) ? variant.qty : parseInt(variant.qty, 10) || 0;
+                const next = adjustBufferQty(current, deltaValue);
+                const appliedDelta = next - current;
+                variant.qty = next;
+                cleanInventoryVariant(entry, key);
+                if(appliedDelta !== 0){
+                  totalApplied += appliedDelta;
+                }
+              });
+              sumInventoryVariantQuantities(entry);
+              return totalApplied;
+            }
             const variant = getInventoryVariant(entry, 'normal');
             const current = Number.isFinite(variant.qty) ? variant.qty : parseInt(variant.qty, 10) || 0;
             const next = adjustBufferQty(current, safeQty);
             variant.qty = next;
             cleanInventoryVariant(entry, 'normal');
             sumInventoryVariantQuantities(entry);
-            return safeQty;
+            return next - current;
           }
           const current = deck[idx].qty || 0;
           const next = Math.max(1, Math.min(60, current + safeQty));
@@ -1243,6 +2032,21 @@ function ptcgdm_render_builder(){
               entry.variants[key] = { qty: 0, price: saved.price };
             }
           });
+          if(requestedVariantTotal > 0){
+            let totalAssigned = 0;
+            INVENTORY_VARIANTS.forEach(({ key })=>{
+              if(!Object.prototype.hasOwnProperty.call(variantDeltas, key)) return;
+              const variant = getInventoryVariant(entry, key);
+              const assigned = variantDeltas[key];
+              variant.qty = assigned;
+              cleanInventoryVariant(entry, key);
+              totalAssigned += assigned;
+            });
+            sumInventoryVariantQuantities(entry);
+            deck.push(entry);
+            deckMap.set(id, index);
+            return totalAssigned;
+          }
           const variant = getInventoryVariant(entry, 'normal');
           variant.qty = initial;
           cleanInventoryVariant(entry, 'normal');
@@ -1257,41 +2061,51 @@ function ptcgdm_render_builder(){
       function clearDeck(){ deck.length=0; deckMap.clear(); renderDeckTable(); updateJSON(); }
       function renderInventoryDataTable(){
         if(!IS_INVENTORY || !els.inventoryBody) return;
-        const emptyRow = `<tr><td colspan="${INVENTORY_SAVED_EMPTY_COLSPAN}" class="muted">No inventory saved yet.</td></tr>`;
+        const defaultEmptyMessage = 'No inventory saved yet.';
+        const datasetEmptyMessage = DATASET_LABEL
+          ? `No ${DATASET_LABEL} cards saved in inventory.`
+          : 'No matching cards saved in inventory.';
+        const makeEmptyRow = (message)=>`<tr><td colspan="${INVENTORY_SAVED_EMPTY_COLSPAN}" class="muted">${esc(message)}</td></tr>`;
         if(!inventoryData.length){
-          els.inventoryBody.innerHTML = emptyRow;
+          els.inventoryBody.innerHTML = makeEmptyRow(defaultEmptyMessage);
           if(els.inventoryTotals) els.inventoryTotals.textContent = '0 cards';
           return;
         }
 
         const metaList = inventoryData.map(entry=>{
-          if(!entry || !entry.id) return null;
-          const entryId = String(entry.id);
-          const card = byId.get(entry.id);
-          const name = (card?.name || entry.name || entryId || '').trim();
-          const setName = getCardSetLabel(card);
-          const number = card?.number ? String(card.number).toUpperCase() : '';
-          const supertype = card?.supertype || entry.supertype || '';
-          const setId = card?.set?.id ? String(card.set.id).toLowerCase() : '';
-          const setNameKey = setName.toLowerCase();
-          const setSortKey = setId || setNameKey;
-          return {
-            entry,
-            entryId,
-            card,
-            name,
-            nameKey: name.toLowerCase(),
-            setName,
-            setNameKey,
-            setSortKey,
-            number,
-            numberKey: number.toUpperCase(),
-            supertype,
-          };
-        }).filter(Boolean);
+            if(!entry || !entry.id) return null;
+            const entryId = String(entry.id);
+            const card = byId.get(entry.id);
+            if(!card){
+              return null;
+            }
+            const displayName = (getCardDisplayName(card) || entry.name || entryId || '').trim();
+            const setName = getCardSetLabel(card);
+            const numberDisplay = getCardDisplayNumber(card);
+            const supertype = card?.supertype || entry.supertype || '';
+            const setId = card?.set?.id ? String(card.set.id).toLowerCase() : '';
+            const setNameKey = setName.toLowerCase();
+            const setSortKey = setId || setNameKey;
+            const numberSortSource = card?.number ? String(card.number) : numberDisplay;
+            const numberKey = String(numberSortSource || '').toUpperCase();
+            return {
+              entry,
+              entryId,
+              card,
+              name: displayName,
+              nameKey: displayName.toLowerCase(),
+              setName,
+              setNameKey,
+              setSortKey,
+              number: numberDisplay,
+              numberKey,
+              supertype,
+            };
+          }).filter(Boolean);
 
         if(!metaList.length){
-          els.inventoryBody.innerHTML = emptyRow;
+          const message = inventoryData.length ? datasetEmptyMessage : defaultEmptyMessage;
+          els.inventoryBody.innerHTML = makeEmptyRow(message);
           if(els.inventoryTotals) els.inventoryTotals.textContent = '0 cards';
           return;
         }
@@ -1344,7 +2158,10 @@ function ptcgdm_render_builder(){
           }
           displayIndex++;
           total += entryQty;
-          rows.push(`<tr data-id="${esc(entry.id)}" data-card-name="${esc(meta.name)}"><td>${displayIndex}</td><td>${esc(meta.name)}</td><td>${esc(meta.setName)}</td><td>${esc(meta.number)}</td><td>${esc(meta.supertype)}</td>${variantCells.join('')}<td><button class="btn danger" data-action="delete-saved" data-name="${esc(meta.name)}">Delete</button></td></tr>`);
+          const actionButtons = [];
+          actionButtons.push(`<button class="btn secondary" data-action="edit-price" data-name="${esc(meta.name)}">Change Price</button>`);
+          actionButtons.push(`<button class="btn danger" data-action="delete-saved" data-name="${esc(meta.name)}">Delete</button>`);
+          rows.push(`<tr data-id="${esc(entry.id)}" data-card-name="${esc(meta.name)}"><td>${displayIndex}</td><td>${esc(meta.name)}</td><td>${esc(meta.setName)}</td><td>${esc(meta.number)}</td><td>${esc(meta.supertype)}</td>${variantCells.join('')}<td>${actionButtons.join(' ')}</td></tr>`);
         });
 
         if(!rows.length){
@@ -1355,6 +2172,48 @@ function ptcgdm_render_builder(){
 
         els.inventoryBody.innerHTML = rows.join('');
         if(els.inventoryTotals) els.inventoryTotals.textContent = `${total} card${total===1?'':'s'}`;
+      }
+
+      function queueInventoryPriceChange(cardId){
+        if(!IS_INVENTORY || !cardId) return;
+        const entry = createDeckEntryFromSaved(cardId);
+        if(!entry){
+          alert('Saved inventory details are unavailable for this card.');
+          return;
+        }
+        let replaced = false;
+        if(deckMap.has(cardId)){
+          const idx = deckMap.get(cardId);
+          if(idx !== undefined){
+            deck[idx] = entry;
+            replaced = true;
+          }
+        }
+        if(!replaced){
+          deck.push(entry);
+        }
+        deckMap.clear();
+        deck.forEach((item, index)=>{
+          if(item && item.id){
+            deckMap.set(item.id, index);
+          }
+        });
+        renderDeckTable();
+        updateJSON();
+        if(!els.deckBody) return;
+        const deckRows = Array.from(els.deckBody.querySelectorAll('tr[data-id]'));
+        const row = deckRows.find(r=>r.getAttribute('data-id') === cardId);
+        if(!row) return;
+        if(typeof row.scrollIntoView === 'function'){
+          row.scrollIntoView({ block: 'nearest' });
+        }
+        const priceInput = row.querySelector('.variantPriceInput');
+        if(priceInput && typeof priceInput.focus === 'function'){
+          priceInput.focus();
+          if(typeof priceInput.select === 'function'){
+            priceInput.select();
+          }
+        }
       }
 
       function removeInventoryEntryLocal(cardId){
@@ -1438,16 +2297,24 @@ function ptcgdm_render_builder(){
       function handleInventoryBodyClick(event){
         const target = event.target instanceof Element ? event.target : null;
         if(!target) return;
-        const button = target.closest('button[data-action="delete-saved"]');
+        const button = target.closest('button[data-action]');
         if(!button) return;
-        event.preventDefault();
+        const action = button.dataset.action || '';
         const row = button.closest('tr[data-id]');
         const cardId = row?.getAttribute('data-id') || button.dataset.id || '';
         if(!cardId) return;
-        const cardName = button.dataset.name || row?.getAttribute('data-card-name') || cardId;
-        const confirmation = `Delete ${cardName} from saved inventory and remove its WooCommerce product?`;
-        if(!window.confirm(confirmation)) return;
-        deleteSavedInventoryEntry(cardId, button, cardName);
+        if(action === 'edit-price'){
+          event.preventDefault();
+          queueInventoryPriceChange(cardId);
+          return;
+        }
+        if(action === 'delete-saved'){
+          event.preventDefault();
+          const cardName = button.dataset.name || row?.getAttribute('data-card-name') || cardId;
+          const confirmation = `Delete ${cardName} from saved inventory and remove its WooCommerce product?`;
+          if(!window.confirm(confirmation)) return;
+          deleteSavedInventoryEntry(cardId, button, cardName);
+        }
       }
       function setInventoryData(entries){
         if(!IS_INVENTORY) return;
@@ -1691,8 +2558,9 @@ function ptcgdm_render_builder(){
         deck.forEach((d,i)=>{
           const c=byId.get(d.id);
           const setName=getCardSetLabel(c);
-          const num=c?.number||'';
+          const numberDisplay=getCardDisplayNumber(c);
           const sup=c?.supertype||'';
+          const displayName=getCardDisplayName(c) || d.id;
           if(IS_INVENTORY){
             const entryTotal = sumInventoryVariantQuantities(d);
             total += entryTotal;
@@ -1705,11 +2573,11 @@ function ptcgdm_render_builder(){
               variantCells.push(`<td><input class="variantQtyInput" data-variant="${key}" type="number" min="${INVENTORY_BUFFER_MIN}" max="${INVENTORY_BUFFER_MAX}" value="${qtyValue}" placeholder="${label}"></td>`);
               variantCells.push(`<td><input class="variantPriceInput" data-variant="${key}" type="number" step="0.01" min="0" value="${priceValue}" placeholder="${label}"></td>`);
             });
-            rows.push(`<tr data-id="${d.id}"><td>${i+1}</td><td>${esc(c?.name||d.id)}</td><td>${esc(setName)}</td><td>${esc(String(num))}</td><td>${esc(sup)}</td>${variantCells.join('')}<td><button class="btn secondary" data-act="remove">Remove</button></td></tr>`);
+            rows.push(`<tr data-id="${d.id}"><td>${i+1}</td><td>${esc(displayName)}</td><td>${esc(setName)}</td><td>${esc(String(numberDisplay || ''))}</td><td>${esc(sup)}</td>${variantCells.join('')}<td><button class="btn secondary" data-act="remove">Remove</button></td></tr>`);
           }else{
             total += d.qty;
             const qtyInputAttrs = 'min="1" max="60"';
-            rows.push(`<tr data-id="${d.id}"><td>${i+1}</td><td>${esc(c?.name||d.id)}</td><td>${esc(setName)}</td><td>${esc(String(num))}</td><td>${esc(sup)}</td>
+            rows.push(`<tr data-id="${d.id}"><td>${i+1}</td><td>${esc(displayName)}</td><td>${esc(setName)}</td><td>${esc(String(numberDisplay || ''))}</td><td>${esc(sup)}</td>
             <td><div class="qtybox"><button class="btn secondary" data-act="minus">–</button><input class="qtyInput" type="number" value="${d.qty}" ${qtyInputAttrs}><button class="btn secondary" data-act="plus">+</button></div></td>
             <td><button class="btn secondary" data-act="remove">Remove</button></td></tr>`);
           }
@@ -1780,9 +2648,11 @@ function ptcgdm_render_builder(){
       }
       function updateJSON(){
         const entries = buildSaveEntries();
+        const deckNameValue = getDeckNameValue();
+        const deckFormatValue = getDeckFormatValue();
         const out = {
-          name: els.deckName.value.trim() || (SAVE_CONFIG.defaultEntryName || 'Untitled Deck'),
-          format: els.deckFormat.value.trim() || 'Standard',
+          name: deckNameValue || (SAVE_CONFIG.defaultEntryName || 'Untitled Deck'),
+          format: deckFormatValue || (SAVE_CONFIG.defaultFormat || 'Standard'),
           cards: entries,
         };
         deckJsonCache = JSON.stringify(out, null, 2);
@@ -1801,7 +2671,7 @@ function ptcgdm_render_builder(){
           button.dataset.saving = '1';
           button.textContent = button.dataset.savingLabel || 'Saving…';
         }
-        const rawName = els.deckName.value.trim();
+        const rawName = getDeckNameValue();
         const fallbackBase = SAVE_CONFIG.defaultBasename || 'deck';
         let safeBase = (rawName || fallbackBase).replace(/[^\w-]+/g,'_');
         if (!safeBase) safeBase = fallbackBase.replace(/[^\w-]+/g,'_') || 'deck';
@@ -1824,7 +2694,7 @@ function ptcgdm_render_builder(){
           const r = await fetch(AJAX_URL, { method:'POST', body });
           const j = await r.json();
           if (!j.success) throw new Error(j.data || 'Unknown error');
-          const displayName = els.deckName.value.trim();
+          const displayName = getDeckNameValue();
           if (!IS_INVENTORY) {
             ensureSavedDeckOption(j.data?.url || '', filename, displayName);
           }
@@ -1939,8 +2809,10 @@ function ptcgdm_render_builder(){
       function applyDeckData(data, options = {}){
         if (!data || typeof data !== 'object') throw new Error('JSON missing data.');
         const entries = normalizeDeckEntries(data);
-        if (typeof data.name === 'string') els.deckName.value = data.name;
-        if (typeof data.format === 'string') els.deckFormat.value = data.format;
+        if (typeof data.name === 'string') setDeckNameValue(data.name);
+        else setDeckNameValue('');
+        if (typeof data.format === 'string') setDeckFormatValue(data.format);
+        else setDeckFormatValue('');
         const isInventorySnapshot = IS_INVENTORY && options.updateInventory === true;
         if (!entries.length) {
           deck.length = 0;
@@ -2205,12 +3077,14 @@ function ptcgdm_lookup_card_preview($card_id){
   $set_id = ptcgdm_extract_set_from_card($key);
   $number = ptcgdm_extract_card_number($key);
   $card = [];
+  $dataset_key = '';
 
   if ($set_id) {
     $map = ptcgdm_load_set_map($set_id);
     if ($map && isset($map[$key])) {
       $card = $map[$key];
     }
+    $dataset_key = ptcgdm_get_set_dataset_key($set_id);
   }
 
   $name = '';
@@ -2224,7 +3098,7 @@ function ptcgdm_lookup_card_preview($card_id){
     $image = $card['images']['small'];
   } elseif (!empty($card['images']['large']) && filter_var($card['images']['large'], FILTER_VALIDATE_URL)) {
     $image = $card['images']['large'];
-  } elseif ($set_id && $number) {
+  } elseif ($set_id && $number && $dataset_key === 'pokemon') {
     $image = sprintf('https://images.pokemontcg.io/%s/%s.png', strtolower($set_id), $number);
   }
 
@@ -2284,11 +3158,29 @@ function ptcgdm_lookup_set_info($set_id) {
     return $cache[$key];
   }
 
-  if (!$cache) {
-    $paths = [
-      PTCGDM_DATA_DIR . '/sets/en.json',
-      PTCGDM_DATA_DIR . '/sets.json',
-    ];
+  $definitions = ptcgdm_get_dataset_definitions();
+  $found = null;
+
+  foreach ($definitions as $dataset_key => $definition) {
+    $data_dir = isset($definition['data_dir']) ? trailingslashit($definition['data_dir']) : '';
+    if ($data_dir === '' || !is_dir($data_dir)) {
+      continue;
+    }
+
+    $settings = ptcgdm_get_dataset_settings($dataset_key);
+    $label_map = isset($settings['set_labels']) && is_array($settings['set_labels']) ? $settings['set_labels'] : [];
+    $custom_paths = isset($settings['set_index_paths']) && is_array($settings['set_index_paths']) ? $settings['set_index_paths'] : [];
+
+    $paths = [];
+    foreach ($custom_paths as $relative_path) {
+      $relative_path = trim((string) $relative_path);
+      if ($relative_path === '') {
+        continue;
+      }
+      $paths[] = $data_dir . ltrim($relative_path, '/');
+    }
+    $paths[] = $data_dir . 'sets/en.json';
+    $paths[] = $data_dir . 'sets.json';
 
     foreach ($paths as $path) {
       if (!file_exists($path)) {
@@ -2317,35 +3209,39 @@ function ptcgdm_lookup_set_info($set_id) {
         if (!is_array($item) || empty($item['id'])) {
           continue;
         }
-        $id = strtolower(trim((string) $item['id']));
-        if ($id === '') {
+        $item_id = strtolower(trim((string) $item['id']));
+        if ($item_id === '') {
           continue;
         }
-        if (!isset($cache[$id])) {
-          $cache[$id] = $item;
+        if (!isset($cache[$item_id])) {
+          $cache[$item_id] = $item;
+        }
+        if ($item_id === $key) {
+          $found = $cache[$item_id];
         }
       }
-      if ($cache) {
-        break;
+      if ($found !== null) {
+        break 2;
       }
     }
-  }
 
-  if (!isset($cache[$key])) {
-    $paths = [
-      PTCGDM_DATA_DIR . '/sets/' . $key . '.json',
-      PTCGDM_DATA_DIR . '/sets/en/' . $key . '.json',
-    ];
-    foreach ($paths as $path) {
-      if (!file_exists($path)) {
-        continue;
-      }
-      $text = @file_get_contents($path);
-      if (!$text) {
-        continue;
-      }
-      $decoded = json_decode($text, true);
-      if (is_array($decoded)) {
+    if ($found === null) {
+      $specific_paths = [
+        $data_dir . 'sets/' . $key . '.json',
+        $data_dir . 'sets/en/' . $key . '.json',
+      ];
+      foreach ($specific_paths as $path) {
+        if (!file_exists($path)) {
+          continue;
+        }
+        $text = @file_get_contents($path);
+        if (!$text) {
+          continue;
+        }
+        $decoded = json_decode($text, true);
+        if (!is_array($decoded)) {
+          continue;
+        }
         if (isset($decoded['data']) && is_array($decoded['data'])) {
           $decoded = $decoded['data'];
         }
@@ -2354,28 +3250,61 @@ function ptcgdm_lookup_set_info($set_id) {
         }
         if (isset($decoded['id'])) {
           $cache[$key] = $decoded;
+          $found = $cache[$key];
           break;
         }
         foreach ($decoded as $item) {
           if (!is_array($item) || empty($item['id'])) {
             continue;
           }
-          $id = strtolower(trim((string) $item['id']));
-          if ($id === '') {
-            continue;
-          }
-          if (!isset($cache[$id])) {
-            $cache[$id] = $item;
+          $item_id = strtolower(trim((string) $item['id']));
+          if ($item_id === $key) {
+            $cache[$key] = $item;
+            $found = $item;
+            break;
           }
         }
-        if (isset($cache[$key])) {
+        if ($found !== null) {
           break;
         }
       }
     }
+
+    if ($found !== null) {
+      break;
+    }
+
+    if ($found === null && isset($label_map[$key])) {
+      $cache[$key] = [
+        'id'   => $set_id,
+        'name' => $label_map[$key],
+      ];
+      $found = $cache[$key];
+      break;
+    }
   }
 
-  return $cache[$key] ?? [];
+  if ($found === null) {
+    $dataset_key = ptcgdm_get_set_dataset_key($set_id);
+    if ($dataset_key !== '') {
+      $settings = ptcgdm_get_dataset_settings($dataset_key);
+      $label_map = isset($settings['set_labels']) && is_array($settings['set_labels']) ? $settings['set_labels'] : [];
+      if (isset($label_map[$key])) {
+        $found = [
+          'id'   => $set_id,
+          'name' => $label_map[$key],
+        ];
+      }
+    }
+  }
+
+  if ($found === null) {
+    $cache[$key] = [];
+    return [];
+  }
+
+  $cache[$key] = $found;
+  return $cache[$key];
 }
 
 function ptcgdm_extract_ptcgo_code(array $card = [], array $set_info = []) {
@@ -3565,6 +4494,274 @@ function ptcgdm_output_managed_product_image_styles() {
 
 add_action('wp_head', 'ptcgdm_output_managed_product_image_styles');
 
+function ptcgdm_output_variant_console_logger() {
+  $doing_ajax = function_exists('wp_doing_ajax') ? wp_doing_ajax() : (defined('DOING_AJAX') && DOING_AJAX);
+  if (is_admin() && !$doing_ajax) {
+    return;
+  }
+
+  global $product;
+  if (!($product instanceof WC_Product) && function_exists('wc_get_product')) {
+    $product = wc_get_product(get_the_ID());
+  }
+
+  if (!($product instanceof WC_Product)) {
+    return;
+  }
+
+  if (!ptcgdm_is_managed_product($product)) {
+    return;
+  }
+
+  if (!method_exists($product, 'is_type') || !$product->is_type('variable')) {
+    return;
+  }
+
+  static $ptcgdm_variant_logger_printed = false;
+  if ($ptcgdm_variant_logger_printed) {
+    return;
+  }
+
+  $ptcgdm_variant_logger_printed = true;
+
+  ob_start();
+  ?>
+  <script id="ptcgdm-variant-console-logger">
+  (function(){
+    var existing = window.ptcgdmVariantLogger;
+    if (existing && typeof existing.logExisting === 'function') {
+      existing.logExisting();
+      return;
+    }
+
+    function matchesSelector(el, selector) {
+      if (!el || el.nodeType !== 1) {
+        return false;
+      }
+      var fn = el.matches || el.matchesSelector || el.msMatchesSelector || el.webkitMatchesSelector || el.mozMatchesSelector;
+      if (fn) {
+        return !!fn.call(el, selector);
+      }
+      if (selector === 'form.variations_form') {
+        var tag = el.tagName || el.nodeName || '';
+        if (!tag || String(tag).toLowerCase() !== 'form') {
+          return false;
+        }
+        var className = typeof el.className === 'string' ? el.className : '';
+        if (!className) {
+          return false;
+        }
+        return (' ' + className + ' ').indexOf(' variations_form ') !== -1;
+      }
+
+      return false;
+    }
+
+    function isArrayLike(value) {
+      if (Array.isArray) {
+        return Array.isArray(value);
+      }
+
+      return Object.prototype.toString.call(value) === '[object Array]';
+    }
+
+    function parseVariations(form) {
+      var data = null;
+      var dataset = form && form.dataset ? form.dataset : {};
+      var productId = dataset.productId || dataset.product_id || '';
+
+      if (window.jQuery) {
+        try {
+          var $form = window.jQuery(form);
+          if (typeof $form.data === 'function') {
+            var stored = $form.data('product_variations');
+            if (stored !== undefined) {
+              data = stored;
+            }
+            if (!productId) {
+              var idData = $form.data('product_id');
+              if (idData) {
+                productId = idData;
+              }
+            }
+          }
+        } catch (err) {}
+      }
+
+      if (!data) {
+        var raw = dataset.productVariations || dataset.product_variations || form.getAttribute('data-product_variations');
+        if (typeof raw === 'string' && raw !== '') {
+          try {
+            data = JSON.parse(raw);
+          } catch (err) {}
+        } else if (raw && typeof raw === 'object') {
+          data = raw;
+        }
+      }
+
+      if (!productId) {
+        var hiddenId = form.querySelector ? form.querySelector('input[name="product_id"]') : null;
+        if (hiddenId && hiddenId.value) {
+          productId = hiddenId.value;
+        }
+      }
+
+      return { data: data, productId: productId };
+    }
+
+    function markLogged(form) {
+      if (form && form.removeAttribute) {
+        form.removeAttribute('data-ptcgdm-variant-log-attempts');
+      }
+      if (form && form.setAttribute) {
+        form.setAttribute('data-ptcgdm-variant-logged', '1');
+      }
+    }
+
+    function logContext(parsed, fallback) {
+      var context = {
+        productId: parsed.productId || null,
+        variationCount: isArrayLike(parsed.data) ? parsed.data.length : null,
+        variations: parsed.data
+      };
+      try {
+        if (fallback) {
+          console.warn('PTCGDM variant info unavailable', context);
+        } else {
+          console.log('PTCGDM variant info', context);
+        }
+      } catch (err) {}
+    }
+
+    function logForm(form) {
+      if (!form || form.nodeType !== 1) {
+        return;
+      }
+      if (form.getAttribute && form.getAttribute('data-ptcgdm-variant-logged') === '1') {
+        return;
+      }
+      if (!matchesSelector(form, 'form.variations_form')) {
+        return;
+      }
+
+      var parsed = parseVariations(form);
+      var data = parsed.data;
+      var emptyArray = isArrayLike(data) && data.length === 0;
+      if (!data || emptyArray) {
+        var attempts = parseInt(form.getAttribute('data-ptcgdm-variant-log-attempts') || '0', 10);
+        if (attempts >= 5) {
+          markLogged(form);
+          parsed.data = data || null;
+          logContext(parsed, true);
+          return;
+        }
+        if (form.setAttribute) {
+          form.setAttribute('data-ptcgdm-variant-log-attempts', String(attempts + 1));
+        }
+        if (typeof setTimeout === 'function') {
+          setTimeout(function () { logForm(form); }, 150 * (attempts + 1));
+        }
+        return;
+      }
+
+      markLogged(form);
+      logContext(parsed, false);
+    }
+
+    function logExisting() {
+      var forms = document.querySelectorAll ? document.querySelectorAll('form.variations_form') : [];
+      for (var i = 0; i < forms.length; i++) {
+        logForm(forms[i]);
+      }
+    }
+
+    function observe() {
+      if (typeof MutationObserver === 'undefined') {
+        return;
+      }
+      var observer = new MutationObserver(function (mutations) {
+        for (var i = 0; i < mutations.length; i++) {
+          var nodes = mutations[i].addedNodes;
+          if (!nodes) {
+            continue;
+          }
+          for (var j = 0; j < nodes.length; j++) {
+            var node = nodes[j];
+            if (!node || node.nodeType !== 1) {
+              continue;
+            }
+            if (matchesSelector(node, 'form.variations_form')) {
+              logForm(node);
+              continue;
+            }
+            if (node.querySelectorAll) {
+              var nested = node.querySelectorAll('form.variations_form');
+              for (var k = 0; k < nested.length; k++) {
+                logForm(nested[k]);
+              }
+            }
+          }
+        }
+      });
+      observer.observe(document.documentElement || document.body, { childList: true, subtree: true });
+    }
+
+    function bindEvents() {
+      if (window.jQuery && window.jQuery(document.body).on) {
+        window.jQuery(document.body).on('wc_variation_form', function (evt, $form) {
+          if ($form && $form.length) {
+            logForm($form[0]);
+          }
+        });
+      }
+    }
+
+    function bootstrap() {
+      logExisting();
+      observe();
+      bindEvents();
+    }
+
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', bootstrap);
+    } else {
+      bootstrap();
+    }
+
+    window.ptcgdmVariantLogger = {
+      logExisting: logExisting,
+      logForm: logForm
+    };
+  })();
+  </script>
+  <?php
+
+  echo (string) ob_get_clean();
+}
+
+add_action('woocommerce_after_single_product_summary', 'ptcgdm_output_variant_console_logger', 99);
+
+function ptcgdm_filter_variation_option_name($term, $attribute = '', $product = null) {
+  $term = is_string($term) ? trim($term) : '';
+  if ($term === '') {
+    return $term;
+  }
+
+  $labels = ptcgdm_get_inventory_variant_labels();
+  if (isset($labels[$term])) {
+    return $labels[$term];
+  }
+
+  $resolved = ptcgdm_inventory_variant_key_from_label($term);
+  if ($resolved !== '' && isset($labels[$resolved])) {
+    return $labels[$resolved];
+  }
+
+  return $term;
+}
+
+add_filter('woocommerce_variation_option_name', 'ptcgdm_filter_variation_option_name', 10, 3);
+
 function ptcgdm_is_inventory_syncing() {
   return !empty($GLOBALS['ptcgdm_inventory_sync_lock']);
 }
@@ -3888,27 +5085,70 @@ function ptcgdm_sync_inventory_product_variations($product, array $active_varian
     return null;
   }
 
-  $attribute_name = 'Finish';
-  $attribute_slug = sanitize_title($attribute_name);
-  $options = [];
-  foreach ($active_variants as $key => $data) {
-    $options[] = ptcgdm_inventory_variant_label($key);
+  $attribute_label = 'Type';
+  $attribute_slug = sanitize_title($attribute_label);
+  if ($attribute_slug === '') {
+    $attribute_slug = 'type';
   }
-  $options = array_values(array_unique(array_filter($options, 'strlen')));
+  $variation_attribute_key = function_exists('wc_variation_attribute_name')
+    ? wc_variation_attribute_name($attribute_slug)
+    : 'attribute_' . $attribute_slug;
+  $variant_labels = ptcgdm_get_inventory_variant_labels();
+  $normalized_variants = [];
+
+  foreach ($active_variants as $key => $data) {
+    $normalized_key = is_string($key) ? trim($key) : '';
+    if ($normalized_key === '') {
+      continue;
+    }
+
+    if (!isset($variant_labels[$normalized_key])) {
+      $converted = ptcgdm_inventory_variant_key_from_label($normalized_key);
+      if ($converted !== '' && isset($variant_labels[$converted])) {
+        $normalized_key = $converted;
+      }
+    }
+
+    if (!isset($variant_labels[$normalized_key])) {
+      continue;
+    }
+
+    $normalized_variants[$normalized_key] = $data;
+  }
+
+  $options = [];
+  foreach ($variant_labels as $variant_key => $_) {
+    if (array_key_exists($variant_key, $normalized_variants)) {
+      $options[] = $variant_key;
+    }
+  }
+
+  foreach ($normalized_variants as $variant_key => $_) {
+    if (!in_array($variant_key, $options, true)) {
+      $options[] = $variant_key;
+    }
+  }
+
+  $active_variants = $normalized_variants;
+
+  $default_attributes = [];
+  if (!empty($options)) {
+    $default_attributes[$attribute_slug] = $options[0];
+  }
 
   if (class_exists('WC_Product_Attribute')) {
     $attribute = new WC_Product_Attribute();
     $attribute->set_id(0);
-    $attribute->set_name($attribute_name);
+    $attribute->set_name($attribute_slug);
     $attribute->set_options($options);
     $attribute->set_position(0);
     $attribute->set_visible(true);
     $attribute->set_variation(true);
-    $product->set_attributes([$attribute]);
+    $product->set_attributes([$attribute_slug => $attribute]);
   } else {
     $product->set_attributes([
-      $attribute_name => [
-        'name'         => $attribute_name,
+      $attribute_slug => [
+        'name'         => $attribute_slug,
         'value'        => implode(' | ', $options),
         'position'     => 0,
         'is_visible'   => 1,
@@ -3917,6 +5157,11 @@ function ptcgdm_sync_inventory_product_variations($product, array $active_varian
       ],
     ]);
   }
+
+  if (method_exists($product, 'set_default_attributes')) {
+    $product->set_default_attributes($default_attributes);
+  }
+  $product->update_meta_data('_default_attributes', $default_attributes);
 
   $existing_children = [];
   $existing_ids = [];
@@ -3946,7 +5191,12 @@ function ptcgdm_sync_inventory_product_variations($product, array $active_varian
   $used_ids = [];
   $min_price = null;
 
-  foreach ($active_variants as $key => $data) {
+  foreach ($options as $variant_key) {
+    if (!isset($active_variants[$variant_key])) {
+      continue;
+    }
+
+    $data = $active_variants[$variant_key];
     $qty = ptcgdm_normalize_inventory_quantity($data['qty'] ?? 0);
     if ($qty < 0) {
       $qty = 0;
@@ -3956,20 +5206,19 @@ function ptcgdm_sync_inventory_product_variations($product, array $active_varian
       $price = ptcgdm_normalize_inventory_price($data['price']);
     }
 
-    if (isset($existing_children[$key])) {
-      $variation = $existing_children[$key];
+    if (isset($existing_children[$variant_key])) {
+      $variation = $existing_children[$variant_key];
     } else {
       $variation = new WC_Product_Variation();
       $variation->set_parent_id($product_id);
       $variation->set_status('publish');
     }
 
-    $label = ptcgdm_inventory_variant_label($key);
-    $attributes = [$attribute_slug => $label];
+    $attributes = [$variation_attribute_key => $variant_key];
     if (method_exists($variation, 'set_attributes')) {
       $variation->set_attributes($attributes);
     }
-    $variation->update_meta_data('_ptcgdm_variant_key', $key);
+    $variation->update_meta_data('_ptcgdm_variant_key', $variant_key);
     if (method_exists($variation, 'set_manage_stock')) {
       $variation->set_manage_stock(true);
     }
@@ -3991,9 +5240,9 @@ function ptcgdm_sync_inventory_product_variations($product, array $active_varian
       $variation->set_price('');
     }
 
-    $sku_suffix = strtoupper(preg_replace('/[^a-z0-9]+/i', '', (string) $key));
+    $sku_suffix = strtoupper(preg_replace('/[^a-z0-9]+/i', '', (string) $variant_key));
     if ($sku_suffix === '') {
-      $sku_suffix = strtoupper(substr((string) $key, 0, 6));
+      $sku_suffix = strtoupper(substr((string) $variant_key, 0, 6));
     }
     $variation->set_sku($sku . '-' . $sku_suffix);
     $variation->save();
@@ -4218,7 +5467,7 @@ function ptcgdm_sync_inventory_products(array $entries) {
       $primary_variant = $variants[$primary_variant_key];
       $primary_qty = isset($primary_variant['qty']) ? (int) $primary_variant['qty'] : 0;
       $primary_price = isset($primary_variant['price']) ? $primary_variant['price'] : null;
-      $requires_variable = count($active_variants) > 1;
+      $requires_variable = !empty($variants);
 
       $card_preview = ptcgdm_lookup_card_preview($card_id);
       $set_id = isset($card_preview['set']) ? trim((string) $card_preview['set']) : '';
@@ -4278,22 +5527,12 @@ function ptcgdm_sync_inventory_products(array $entries) {
             if (method_exists($product, 'set_type')) {
               $product->set_type('variable');
             }
-          } elseif (!$requires_variable && $current_type !== 'simple') {
-            $class_name = class_exists('WC_Product_Factory') ? WC_Product_Factory::get_product_classname($product_id, 'simple') : '';
-            if ($class_name && class_exists($class_name)) {
-              $product = new $class_name($product_id);
-            } else {
-              $product = new WC_Product_Simple($product_id);
-            }
-            if (method_exists($product, 'set_type')) {
-              $product->set_type('simple');
-            }
           }
         }
       }
 
       if (!$product instanceof WC_Product) {
-        $product = $requires_variable ? new WC_Product_Variable() : new WC_Product_Simple();
+        $product = new WC_Product_Variable();
         if (method_exists($product, 'set_sku')) {
           $product->set_sku($sku);
         }
@@ -4316,20 +5555,11 @@ function ptcgdm_sync_inventory_products(array $entries) {
         }
       }
 
-      if ($requires_variable) {
-        $product->set_manage_stock(false);
-        if (method_exists($product, 'set_stock_quantity')) {
-          $product->set_stock_quantity(null);
-        }
-        $product->set_stock_status($total_qty > 0 ? 'instock' : 'outofstock');
-      } else {
-        $product->set_manage_stock(true);
-        $product->set_stock_quantity($primary_qty);
-        $product->set_stock_status($primary_qty > 0 ? 'instock' : 'outofstock');
-        if (method_exists($product, 'set_attributes')) {
-          $product->set_attributes([]);
-        }
+      $product->set_manage_stock(false);
+      if (method_exists($product, 'set_stock_quantity')) {
+        $product->set_stock_quantity(null);
       }
+      $product->set_stock_status($total_qty > 0 ? 'instock' : 'outofstock');
 
       $product->set_catalog_visibility('visible');
       $product->update_meta_data('_ptcgdm_managed', '1');
@@ -4344,25 +5574,15 @@ function ptcgdm_sync_inventory_products(array $entries) {
         $product->save();
       }
 
-      if (!$requires_variable && $product->get_id()) {
-        ptcgdm_delete_product_variations($product->get_id());
-        $product->update_meta_data('_ptcgdm_variant_key', $primary_variant_key);
-        if ($primary_price !== null) {
-          $formatted_price = function_exists('wc_format_decimal') ? wc_format_decimal($primary_price) : number_format((float) $primary_price, 2, '.', '');
-          $product->set_regular_price($formatted_price);
-          $product->set_price($formatted_price);
-        }
+      $product->update_meta_data('_ptcgdm_variant_key', 'variable');
+      $min_price = ptcgdm_sync_inventory_product_variations($product, $active_variants, $sku);
+      if ($min_price !== null) {
+        $formatted_price = function_exists('wc_format_decimal') ? wc_format_decimal($min_price) : number_format((float) $min_price, 2, '.', '');
+        $product->set_regular_price($formatted_price);
+        $product->set_price($formatted_price);
       } else {
-        $product->update_meta_data('_ptcgdm_variant_key', 'variable');
-        $min_price = ptcgdm_sync_inventory_product_variations($product, $active_variants, $sku);
-        if ($min_price !== null) {
-          $formatted_price = function_exists('wc_format_decimal') ? wc_format_decimal($min_price) : number_format((float) $min_price, 2, '.', '');
-          $product->set_regular_price($formatted_price);
-          $product->set_price($formatted_price);
-        } else {
-          $product->set_regular_price('');
-          $product->set_price('');
-        }
+        $product->set_regular_price('');
+        $product->set_price('');
       }
 
       ptcgdm_store_managed_product_snapshot($product, [
@@ -4480,7 +5700,7 @@ function ptcgdm_zero_unlisted_inventory_products(array $active_skus) {
 
           $variant_key = trim((string) $variation->get_meta('_ptcgdm_variant_key'));
           if ($variant_key === '' && method_exists($variation, 'get_attribute')) {
-            $finish = $variation->get_attribute('finish');
+            $finish = $variation->get_attribute('type');
             if ($finish !== '') {
               $variant_key = ptcgdm_inventory_variant_key_from_label($finish);
             }
@@ -4875,7 +6095,7 @@ function ptcgdm_handle_inventory_stock_change($product) {
     }
 
     $children = method_exists($parent_product, 'get_children') ? $parent_product->get_children() : [];
-    $attribute_slug = function_exists('sanitize_title') ? sanitize_title('Finish') : 'finish';
+    $attribute_slug = function_exists('sanitize_title') ? sanitize_title('Type') : 'type';
 
     foreach ($children as $child_id) {
       $child_id = (int) $child_id;
@@ -4925,8 +6145,16 @@ if (function_exists('add_action')) {
   add_action('woocommerce_product_set_stock', 'ptcgdm_handle_inventory_stock_change', 10, 1);
 }
 
+function ptcgdm_render_pokemon_inventory() {
+  ptcgdm_render_builder(ptcgdm_get_dataset_settings('pokemon'));
+}
+
+function ptcgdm_render_one_piece_inventory() {
+  ptcgdm_render_builder(ptcgdm_get_dataset_settings('one_piece'));
+}
+
 function ptcgdm_render_inventory() {
-  ptcgdm_render_builder();
+  ptcgdm_render_pokemon_inventory();
 }
 
 function ptcgdm_extract_set_from_card($card_id){
@@ -4957,6 +6185,10 @@ function ptcgdm_extract_card_number($card_id){
 
 function ptcgdm_load_set_map($set_id){
   static $cache = [];
+  global $ptcgdm_dataset_cache;
+  if (!is_array($ptcgdm_dataset_cache)) {
+    $ptcgdm_dataset_cache = [];
+  }
   $original = trim((string) $set_id);
   if ($original === '') return [];
   $lookup_key = strtolower($original);
@@ -4964,39 +6196,88 @@ function ptcgdm_load_set_map($set_id){
     return $cache[$lookup_key];
   }
 
-  $candidates = array_unique([
-    strtolower($original),
-    $original,
-  ]);
-
-  $paths = [];
-  foreach ($candidates as $variant) {
-    if ($variant === '') continue;
-    $paths[] = PTCGDM_DATA_DIR . '/cards/en/' . $variant . '.json';
-    $paths[] = PTCGDM_DATA_DIR . '/cards/' . $variant . '.json';
-    $paths[] = PTCGDM_DATA_DIR . '/' . $variant . '.json';
+  $definitions = ptcgdm_get_dataset_definitions();
+  if (!$definitions) {
+    $cache[$lookup_key] = [];
+    return [];
   }
 
-  foreach ($paths as $path) {
-    if (!file_exists($path)) continue;
-    $text = @file_get_contents($path);
-    if (!$text) continue;
-    $cards = ptcgdm_normalise_set_json($text);
-    if (!$cards) continue;
-    $map = [];
-    foreach ($cards as $card) {
-      if (is_array($card) && !empty($card['id'])) {
-        $map[$card['id']] = $card;
-      }
+  $candidates = array_unique(array_filter([
+    strtolower($original),
+    strtoupper($original),
+    $original,
+  ], function($value){ return $value !== ''; }));
+
+  foreach ($definitions as $dataset_key => $definition) {
+    $data_dir = isset($definition['data_dir']) ? trailingslashit($definition['data_dir']) : '';
+    if ($data_dir === '' || !is_dir($data_dir)) {
+      continue;
     }
-    if ($map) {
-      $cache[$lookup_key] = $map;
-      return $cache[$lookup_key];
+
+    $settings = ptcgdm_get_dataset_settings($dataset_key);
+    $label_map = isset($settings['set_labels']) && is_array($settings['set_labels']) ? $settings['set_labels'] : [];
+
+    foreach ($candidates as $variant) {
+      $variant = trim((string) $variant);
+      if ($variant === '') {
+        continue;
+      }
+
+      $paths = [
+        $data_dir . 'cards/en/' . $variant . '.json',
+        $data_dir . 'cards/' . $variant . '.json',
+        $data_dir . $variant . '.json',
+      ];
+
+      foreach ($paths as $path) {
+        if (!file_exists($path)) {
+          continue;
+        }
+
+        $text = @file_get_contents($path);
+        if (!$text) {
+          continue;
+        }
+
+        $cards = ptcgdm_normalise_set_json($text);
+        if (!$cards) {
+          continue;
+        }
+
+        $map = [];
+        foreach ($cards as $card) {
+          if (!is_array($card) || empty($card['id'])) {
+            continue;
+          }
+          $normalized = ptcgdm_normalize_dataset_card($card, $variant, $dataset_key, $label_map);
+          if (!empty($normalized['id'])) {
+            $map[$normalized['id']] = $normalized;
+          }
+        }
+
+        if ($map) {
+          $cache[$lookup_key] = $map;
+          $ptcgdm_dataset_cache[$lookup_key] = $dataset_key;
+          return $cache[$lookup_key];
+        }
+      }
     }
   }
 
   $cache[$lookup_key] = [];
   return [];
+}
+
+function ptcgdm_get_set_dataset_key($set_id) {
+  global $ptcgdm_dataset_cache;
+  if (!is_array($ptcgdm_dataset_cache)) {
+    return '';
+  }
+  $lookup_key = strtolower(trim((string) $set_id));
+  if ($lookup_key === '') {
+    return '';
+  }
+  return isset($ptcgdm_dataset_cache[$lookup_key]) ? (string) $ptcgdm_dataset_cache[$lookup_key] : '';
 }
 
 function ptcgdm_normalise_set_json($text){
@@ -5033,6 +6314,80 @@ function ptcgdm_normalise_set_json($text){
     }
   }
   return $manual;
+}
+
+function ptcgdm_normalize_card_number_value($value) {
+  $raw = trim((string) $value);
+  if ($raw === '') {
+    return '';
+  }
+  if (strpos($raw, '-') !== false) {
+    $parts = explode('-', $raw);
+    $raw = end($parts);
+  }
+  return trim($raw);
+}
+
+function ptcgdm_normalize_card_number_from_entry(array $card) {
+  $candidate = '';
+  if (!empty($card['number'])) {
+    $candidate = ptcgdm_normalize_card_number_value($card['number']);
+    if ($candidate !== '') {
+      return $candidate;
+    }
+  }
+
+  foreach (['code', 'id'] as $key) {
+    if (empty($card[$key])) {
+      continue;
+    }
+    $candidate = ptcgdm_normalize_card_number_value($card[$key]);
+    if ($candidate !== '') {
+      return $candidate;
+    }
+  }
+
+  return '';
+}
+
+function ptcgdm_normalize_dataset_card(array $card, $set_id, $dataset_key = 'pokemon', array $label_map = []) {
+  $normalized = $card;
+
+  $set_id = strtolower(trim((string) $set_id));
+  if ($set_id === '') {
+    $set_id = strtolower(ptcgdm_extract_set_from_card($card['id'] ?? ''));
+  }
+
+  if (!isset($normalized['set']) || !is_array($normalized['set'])) {
+    $normalized['set'] = [];
+  }
+
+  if (empty($normalized['set']['id'])) {
+    $normalized['set']['id'] = $set_id;
+  } else {
+    $normalized['set']['id'] = strtolower(trim((string) $normalized['set']['id']));
+  }
+
+  $lookup_id = strtolower(trim((string) ($normalized['set']['id'] ?? '')));
+  if ($lookup_id === '') {
+    $lookup_id = $set_id;
+    $normalized['set']['id'] = $lookup_id;
+  }
+
+  if (empty($normalized['set']['name']) && $lookup_id !== '' && isset($label_map[$lookup_id])) {
+    $normalized['set']['name'] = $label_map[$lookup_id];
+  }
+
+  if (empty($normalized['supertype']) && !empty($normalized['type'])) {
+    $normalized['supertype'] = $normalized['type'];
+  }
+
+  $number = ptcgdm_normalize_card_number_from_entry($normalized);
+  if ($number !== '') {
+    $normalized['number'] = $number;
+  }
+
+  return $normalized;
 }
 
 function ptcgdm_is_list($array){
