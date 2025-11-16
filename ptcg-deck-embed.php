@@ -42,7 +42,7 @@ function ptcgdm_get_dataset_definitions() {
         'Sun & Moon' => ['smp','sm1','sm2','sm3','sm35','sm4','sm5','sm6','sm7','sm75','sm8','sm9','det1','sm10','sm11','sm115','sma','sm12'],
         'Sword & Shield' => ['swshp','swsh1','swsh2','swsh3','swsh35','swsh4','swsh45','swsh45sv','swsh5','swsh6','swsh7','swsh8','swsh9','swsh9tg','swsh10','swsh10tg','pgo','swsh11','swsh11tg','swsh12','swsh12tg','swsh12pt5','swsh12pt5gg'],
         'Scarlet & Violet' => ['svp','sve','sv1','sv2','sv3','sv3pt5','sv4','sv4pt5','sv5','sv6','sv6pt5','sv7','sv8','sv8pt5','sv9','sv10','zsv10pt5','rsv10pt5'],
-        'Mega Evolution' => ['me1'],
+        'Mega Evolution' => ['me1', 'me2'],
       ],
       'set_index_paths'  => [],
       'is_pokemon'       => true,
