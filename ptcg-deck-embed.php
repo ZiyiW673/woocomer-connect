@@ -1397,6 +1397,30 @@ function ptcgdm_render_builder(array $config = []){
         if(collapsed && collapsed !== base){
           variants.add(collapsed);
         }
+        if(base.includes('/')){
+          const [beforeSlash] = base.split('/', 2);
+          if(beforeSlash){
+            variants.add(beforeSlash);
+            const trimmed = beforeSlash.replace(/^0+/, '');
+            if(trimmed && trimmed !== beforeSlash){
+              variants.add(trimmed);
+            }
+          }
+          const noSlash = base.replace(/\//g, '');
+          if(noSlash && noSlash !== base){
+            variants.add(noSlash);
+          }
+        }
+        if(collapsed.includes('/')){
+          const [collapsedBeforeSlash] = collapsed.split('/', 2);
+          if(collapsedBeforeSlash){
+            variants.add(collapsedBeforeSlash);
+          }
+          const collapsedNoSlash = collapsed.replace(/\//g, '');
+          if(collapsedNoSlash && collapsedNoSlash !== collapsed){
+            variants.add(collapsedNoSlash);
+          }
+        }
         if(DATASET_KEY === 'one_piece'){
           const altVariant = collapsed.replace(/p1\b/, ONE_PIECE_VARIANT_LABELS.p1.replace(/\s+/g,'').toLowerCase()).replace(/p2\b/, ONE_PIECE_VARIANT_LABELS.p2.replace(/\s+/g,'').toLowerCase());
           if(altVariant && altVariant !== collapsed){
@@ -1749,6 +1773,9 @@ function ptcgdm_render_builder(array $config = []){
           const sanitisedNumber = numberClean.replace(/[^0-9a-zA-Z\/+-]+/g,'');
           if(!sanitisedSet) return { error: 'Missing set code.' };
           if(!sanitisedNumber) return { error: 'Missing card number.' };
+          const slashIndex = sanitisedNumber.indexOf('/');
+          const lookupNumber = slashIndex >= 0 ? sanitisedNumber.slice(0, slashIndex) : sanitisedNumber;
+          if(!lookupNumber) return { error: 'Missing card number.' };
           const quantityTokens = tokens;
           const quantityResult = parseInventoryVariantQuantities(quantityTokens);
           if(quantityResult && quantityResult.error){
@@ -1767,7 +1794,7 @@ function ptcgdm_render_builder(array $config = []){
             qty: totalQty,
             setCode: sanitisedSet,
             setCodeDisplay: sanitisedSet.toUpperCase(),
-            number: sanitisedNumber,
+            number: lookupNumber,
             numberDisplay: sanitisedNumber.toUpperCase(),
             variantQuantities,
           };
