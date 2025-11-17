@@ -434,10 +434,14 @@ function ptcgdm_render_builder(array $config = []){
   $nonce = wp_create_nonce($nonce_action);
   $delete_inventory_action = '';
   $delete_inventory_nonce  = '';
+  $manual_sync_action      = '';
+  $manual_sync_nonce       = '';
   $inventory_sort_default  = 'alpha';
   if ($mode === 'inventory') {
     $delete_inventory_action = 'ptcgdm_delete_inventory_card';
     $delete_inventory_nonce  = wp_create_nonce('ptcgdm_delete_inventory_card');
+    $manual_sync_action      = 'ptcgdm_manual_inventory_sync';
+    $manual_sync_nonce       = wp_create_nonce('ptcgdm_manual_inventory_sync');
   }
 
   $data_base_url = esc_js($data_url);
@@ -456,6 +460,8 @@ function ptcgdm_render_builder(array $config = []){
     'mode'                => $mode,
     'deleteInventoryAction' => $delete_inventory_action,
     'deleteInventoryNonce'  => $delete_inventory_nonce,
+    'manualSyncAction'      => $manual_sync_action,
+    'manualSyncNonce'       => $manual_sync_nonce,
     'inventorySortDefault'  => $inventory_sort_default,
     'seriesConfig'        => $series_config,
     'setLabels'           => $set_labels,
@@ -645,9 +651,12 @@ function ptcgdm_render_builder(array $config = []){
         </table>
       </div>
 
-      <div class="row" style="margin-top:12px;align-items:center;justify-content:space-between">
-        <div>
+      <div class="row" style="margin-top:12px;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
           <button id="btnSaveDeck" class="btn secondary" disabled><?php echo esc_html($save_button_label); ?></button>
+          <?php if ($mode === 'inventory') : ?>
+            <button id="btnSyncInventory" class="btn secondary" data-syncing-label="Syncing…">Sync Products</button>
+          <?php endif; ?>
         </div>
         <div><strong>Buffer Total:</strong> <span id="deckTotals" class="chip">0 cards</span></div>
       </div>
@@ -710,6 +719,8 @@ function ptcgdm_render_builder(array $config = []){
         autoLoadUrl: '',
         deleteInventoryAction: 'ptcgdm_delete_inventory_card',
         deleteInventoryNonce: '',
+        manualSyncAction: '',
+        manualSyncNonce: '',
         inventorySortDefault: 'alpha',
       }, <?php echo $script_config; ?>);
       const MODE = 'inventory';
@@ -843,6 +854,7 @@ function ptcgdm_render_builder(array $config = []){
         deckBody: document.getElementById('deckBody'),
         deckTotals: document.getElementById('deckTotals'),
         btnSaveDeck: document.getElementById('btnSaveDeck'),
+        btnSyncInventory: document.getElementById('btnSyncInventory'),
         bulkInput: document.getElementById('bulkInput'),
         btnBulkAdd: document.getElementById('btnBulkAdd'),
         bulkStatus: document.getElementById('bulkStatus'),
@@ -858,8 +870,12 @@ function ptcgdm_render_builder(array $config = []){
       if (els.btnSaveDeck) {
         els.btnSaveDeck.dataset.defaultLabel = els.btnSaveDeck.textContent || '';
       }
+      if (els.btnSyncInventory) {
+        els.btnSyncInventory.dataset.defaultLabel = els.btnSyncInventory.textContent || '';
+      }
 
       let isSavingDeck = false;
+      let isManualSyncing = false;
       let deckNameState = typeof SAVE_CONFIG.defaultEntryName === 'string' ? SAVE_CONFIG.defaultEntryName : '';
       let deckFormatState = typeof SAVE_CONFIG.defaultFormat === 'string' ? SAVE_CONFIG.defaultFormat : '';
 
@@ -1114,6 +1130,12 @@ function ptcgdm_render_builder(array $config = []){
         }
         if (els.btnSaveDeck) {
           els.btnSaveDeck.addEventListener('click', saveDeck);
+        }
+        if (IS_INVENTORY && els.btnSyncInventory) {
+          els.btnSyncInventory.addEventListener('click', event => {
+            event.preventDefault();
+            triggerManualInventorySync();
+          });
         }
         if (els.deckName) {
           els.deckName.addEventListener('input', ()=>{
@@ -2758,6 +2780,55 @@ function ptcgdm_render_builder(array $config = []){
         }
       }
 
+      async function triggerManualInventorySync(){
+        if (!IS_INVENTORY || isManualSyncing) {
+          return;
+        }
+        const action = SAVE_CONFIG.manualSyncAction || '';
+        const nonce = SAVE_CONFIG.manualSyncNonce || '';
+        if (!action || !nonce) {
+          alert('Manual sync is unavailable in this view.');
+          return;
+        }
+        isManualSyncing = true;
+        const button = els.btnSyncInventory || null;
+        const defaultLabel = button ? (button.dataset.defaultLabel || button.textContent || '') : '';
+        if (button) {
+          button.disabled = true;
+          button.textContent = button.dataset.syncingLabel || 'Syncing…';
+        }
+        try {
+          const payload = new FormData();
+          payload.append('action', action);
+          payload.append('nonce', nonce);
+          const response = await fetch(AJAX_URL, { method: 'POST', body: payload });
+          if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+          }
+          const result = await response.json();
+          if (!result?.success) {
+            throw new Error(result?.data || 'Unknown error');
+          }
+          const data = result.data || {};
+          let message = '';
+          if (data.message) {
+            message = data.message;
+          } else if (data.syncQueued) {
+            message = 'Inventory sync queued. WooCommerce products will update shortly.';
+          }
+          alert(message || 'Inventory sync started.');
+        } catch (err) {
+          const msg = err && err.message ? err.message : err;
+          alert(`Sync failed: ${msg}`);
+        } finally {
+          isManualSyncing = false;
+          if (button) {
+            button.disabled = false;
+            button.textContent = defaultLabel || 'Sync Products';
+          }
+        }
+      }
+
       function ensureSavedDeckOption(url, filename, deckName){
         if (!url || !els.savedDeckSelect) return;
         const options = Array.from(els.savedDeckSelect.options || []);
@@ -3096,6 +3167,25 @@ add_action('wp_ajax_ptcgdm_delete_inventory_card', function(){
   }
 
   wp_send_json_success($response);
+});
+
+add_action('wp_ajax_ptcgdm_manual_inventory_sync', function(){
+  if (!current_user_can('manage_options')) {
+    wp_send_json_error('Permission denied', 403);
+  }
+
+  check_ajax_referer('ptcgdm_manual_inventory_sync', 'nonce');
+
+  $syncQueued = ptcgdm_trigger_inventory_sync();
+
+  if (!$syncQueued) {
+    wp_send_json_error('Unable to start inventory sync. Please try again.');
+  }
+
+  wp_send_json_success([
+    'syncQueued' => true,
+    'message'    => 'Inventory sync queued. WooCommerce products will update shortly.',
+  ]);
 });
 
 function ptcgdm_handle_inventory_sync_async_request() {
