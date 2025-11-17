@@ -5040,10 +5040,28 @@ function ptcgdm_trigger_inventory_sync() {
   return false;
 }
 
+function ptcgdm_prepare_inventory_sync_environment() {
+  if (function_exists('ignore_user_abort')) {
+    ignore_user_abort(true);
+  }
+
+  if (function_exists('wp_raise_memory_limit')) {
+    wp_raise_memory_limit('admin');
+  }
+
+  if (function_exists('wc_set_time_limit')) {
+    wc_set_time_limit(0);
+  } elseif (function_exists('set_time_limit')) {
+    @set_time_limit(0);
+  }
+}
+
 function ptcgdm_run_inventory_sync_now() {
   if (ptcgdm_is_inventory_syncing()) {
     return new WP_Error('ptcgdm_sync_running', __('Inventory sync is already running. Please wait for it to finish.', 'ptcgdm'));
   }
+
+  ptcgdm_prepare_inventory_sync_environment();
 
   $dir = trailingslashit(ptcgdm_get_inventory_dir());
   $path = $dir . PTCGDM_INVENTORY_FILENAME;
@@ -5077,7 +5095,20 @@ function ptcgdm_run_inventory_sync_now() {
     $entries = $data['cards'];
   }
 
-  ptcgdm_sync_inventory_products($entries);
+  try {
+    ptcgdm_sync_inventory_products($entries);
+  } catch (Throwable $sync_error) {
+    if (defined('WP_DEBUG') && WP_DEBUG) {
+      error_log('PTCGDM inventory sync failed: ' . $sync_error->getMessage());
+    }
+
+    $message = trim($sync_error->getMessage());
+    if ($message === '') {
+      $message = __('Inventory sync encountered an unexpected error.', 'ptcgdm');
+    }
+
+    return new WP_Error('ptcgdm_sync_exception', $message);
+  }
 
   return true;
 }
