@@ -693,6 +693,31 @@ function ptcgdm_render_builder(array $config = []){
           </select>
         </div>
       </div>
+      <div class="row" style="margin:0 0 8px;gap:12px;flex-wrap:wrap">
+        <div style="flex:1 1 220px;min-width:200px">
+          <label for="inventoryFilterSet">Set</label>
+          <select id="inventoryFilterSet" disabled>
+            <option value="">Loading…</option>
+          </select>
+        </div>
+        <div style="flex:1 1 180px;min-width:160px">
+          <label for="inventoryFilterSupertype">Supertype</label>
+          <select id="inventoryFilterSupertype">
+            <option value="">All</option>
+            <?php foreach ($supertype_options as $option) :
+              $option = trim((string) $option);
+              if ($option === '') continue;
+            ?>
+              <option><?php echo esc_html($option); ?></option>
+            <?php endforeach; ?>
+          </select>
+        </div>
+        <div style="flex:2 1 320px;min-width:240px">
+          <label for="inventoryFilterName">Name (type to filter)</label>
+          <input id="inventoryFilterName" placeholder="e.g., Pikachu, Nest Ball">
+        </div>
+      </div>
+      <div class="muted" id="inventoryFilterStatus" style="margin:-4px 0 8px">Showing all saved cards.</div>
       <div class="table-scroll">
         <table id="inventoryDataTable">
           <thead>
@@ -886,6 +911,10 @@ function ptcgdm_render_builder(array $config = []){
         inventoryBody: document.getElementById('inventoryDataBody'),
         inventoryTotals: document.getElementById('inventoryTotals'),
         inventorySortMode: document.getElementById('inventorySortMode'),
+        inventoryFilterSet: document.getElementById('inventoryFilterSet'),
+        inventoryFilterSupertype: document.getElementById('inventoryFilterSupertype'),
+        inventoryFilterName: document.getElementById('inventoryFilterName'),
+        inventoryFilterStatus: document.getElementById('inventoryFilterStatus'),
         syncProgress: document.getElementById('syncProgress'),
         syncProgressText: document.getElementById('syncProgressText')
       };
@@ -1201,6 +1230,21 @@ function ptcgdm_render_builder(array $config = []){
             }
           });
         }
+        if (IS_INVENTORY && els.inventoryFilterSet) {
+          els.inventoryFilterSet.addEventListener('change', ()=>{
+            renderInventoryDataTable();
+          });
+        }
+        if (IS_INVENTORY && els.inventoryFilterSupertype) {
+          els.inventoryFilterSupertype.addEventListener('change', ()=>{
+            renderInventoryDataTable();
+          });
+        }
+        if (IS_INVENTORY && els.inventoryFilterName) {
+          els.inventoryFilterName.addEventListener('input', ()=>{
+            renderInventoryDataTable();
+          });
+        }
         if (els.savedDeckSelect) {
           els.savedDeckSelect.addEventListener('change', ()=>updateLoadDeckButton(true));
         }
@@ -1221,7 +1265,7 @@ function ptcgdm_render_builder(array $config = []){
       });
 
       async function populateSetDropdown(){
-        const opt=['<option value="">Choose set…</option>'];
+        const optGroups = [];
         for (const [group, arr] of Object.entries(ALLOWED_GROUPS)){
           const ids = arr.map(([id])=>id);
           const metas = await Promise.all(ids.map(id=>getSetMetadata(id)));
@@ -1232,11 +1276,23 @@ function ptcgdm_render_builder(array $config = []){
             return `<option value="${esc(id)}">${esc(resolvedLabel)}</option>`;
           }).join('');
           if (items) {
-            opt.push(`<optgroup label="${esc(group)}">${items}</optgroup>`);
+            optGroups.push(`<optgroup label="${esc(group)}">${items}</optgroup>`);
           }
         }
-        els.selSet.innerHTML=opt.join('');
-        els.selSet.disabled=false; els.selSupertype.disabled=false;
+        const optGroupMarkup = optGroups.join('');
+        if (els.selSet) {
+          const builderOptions = [`<option value="">Choose set…</option>`, optGroupMarkup].filter(Boolean).join('');
+          els.selSet.innerHTML = builderOptions;
+          els.selSet.disabled = false;
+        }
+        if (els.inventoryFilterSet) {
+          const filterOptions = [`<option value="">All sets</option>`, optGroupMarkup].filter(Boolean).join('');
+          els.inventoryFilterSet.innerHTML = filterOptions;
+          els.inventoryFilterSet.disabled = false;
+        }
+        if (els.selSupertype) {
+          els.selSupertype.disabled = false;
+        }
       }
 
       async function loadDataset(){
@@ -2147,10 +2203,12 @@ function ptcgdm_render_builder(array $config = []){
         const datasetEmptyMessage = DATASET_LABEL
           ? `No ${DATASET_LABEL} cards saved in inventory.`
           : 'No matching cards saved in inventory.';
+        const filterEmptyMessage = 'No saved cards match the selected filters.';
         const makeEmptyRow = (message)=>`<tr><td colspan="${INVENTORY_SAVED_EMPTY_COLSPAN}" class="muted">${esc(message)}</td></tr>`;
         if(!inventoryData.length){
           els.inventoryBody.innerHTML = makeEmptyRow(defaultEmptyMessage);
           if(els.inventoryTotals) els.inventoryTotals.textContent = '0 cards';
+          setInventoryFilterStatusMessage('No saved cards available.');
           return;
         }
 
@@ -2170,12 +2228,15 @@ function ptcgdm_render_builder(array $config = []){
             const setSortKey = setId || setNameKey;
             const numberSortSource = card?.number ? String(card.number) : numberDisplay;
             const numberKey = String(numberSortSource || '').toUpperCase();
+            const searchKey = getCardSearchName(card) || norm(displayName);
             return {
               entry,
               entryId,
               card,
               name: displayName,
               nameKey: displayName.toLowerCase(),
+              searchKey,
+              setId,
               setName,
               setNameKey,
               setSortKey,
@@ -2189,10 +2250,45 @@ function ptcgdm_render_builder(array $config = []){
           const message = inventoryData.length ? datasetEmptyMessage : defaultEmptyMessage;
           els.inventoryBody.innerHTML = makeEmptyRow(message);
           if(els.inventoryTotals) els.inventoryTotals.textContent = '0 cards';
+          setInventoryFilterStatusMessage(message);
           return;
         }
 
-        metaList.sort((a, b)=>{
+        let filteredMetaList = metaList;
+        let filterActive = false;
+        const filterSetId = els.inventoryFilterSet && typeof els.inventoryFilterSet.value === 'string'
+          ? els.inventoryFilterSet.value.trim().toLowerCase()
+          : '';
+        const filterSupertype = els.inventoryFilterSupertype
+          ? norm(els.inventoryFilterSupertype.value)
+          : '';
+        const filterNameQuery = els.inventoryFilterName
+          ? norm(els.inventoryFilterName.value)
+          : '';
+
+        if(filterSetId){
+          filterActive = true;
+          filteredMetaList = filteredMetaList.filter(meta => meta.setId === filterSetId);
+        }
+        if(filterSupertype){
+          filterActive = true;
+          filteredMetaList = filteredMetaList.filter(meta => norm(meta.supertype) === filterSupertype);
+        }
+        if(filterNameQuery){
+          filterActive = true;
+          filteredMetaList = filteredMetaList.filter(meta => meta.searchKey && meta.searchKey.includes(filterNameQuery));
+        }
+
+        if(!filteredMetaList.length){
+          const message = filterActive ? filterEmptyMessage : datasetEmptyMessage;
+          els.inventoryBody.innerHTML = makeEmptyRow(message);
+          if(els.inventoryTotals) els.inventoryTotals.textContent = '0 cards';
+          setInventoryFilterStatusMessage(message);
+          return;
+        }
+
+        const workingList = filteredMetaList.slice();
+        workingList.sort((a, b)=>{
           if(inventorySortMode === 'number'){
             const setCmp = a.setSortKey.localeCompare(b.setSortKey);
             if(setCmp !== 0) return setCmp;
@@ -2215,7 +2311,7 @@ function ptcgdm_render_builder(array $config = []){
         let total=0;
         let displayIndex = 0;
 
-        metaList.forEach(meta=>{
+        workingList.forEach(meta=>{
           const { entry } = meta;
           const variants = entry.variants && typeof entry.variants === 'object' ? entry.variants : {};
           let entryQty = 0;
@@ -2247,13 +2343,30 @@ function ptcgdm_render_builder(array $config = []){
         });
 
         if(!rows.length){
-          els.inventoryBody.innerHTML = emptyRow;
+          const message = filterActive ? filterEmptyMessage : datasetEmptyMessage;
+          els.inventoryBody.innerHTML = makeEmptyRow(message);
           if(els.inventoryTotals) els.inventoryTotals.textContent = '0 cards';
+          setInventoryFilterStatusMessage(message);
           return;
         }
 
         els.inventoryBody.innerHTML = rows.join('');
         if(els.inventoryTotals) els.inventoryTotals.textContent = `${total} card${total===1?'':'s'}`;
+        if(filterActive){
+          const totalLabel = metaList.length === 1 ? 'card' : 'cards';
+          const shownLabel = workingList.length === 1 ? 'card' : 'cards';
+          const message = `Showing ${workingList.length} ${shownLabel} out of ${metaList.length} saved ${totalLabel}.`;
+          setInventoryFilterStatusMessage(message);
+        }else{
+          const shownLabel = workingList.length === 1 ? 'card' : 'cards';
+          setInventoryFilterStatusMessage(`Showing all ${workingList.length} saved ${shownLabel}.`);
+        }
+      }
+
+      function setInventoryFilterStatusMessage(message){
+        if(!IS_INVENTORY || !els.inventoryFilterStatus) return;
+        const text = message ? String(message) : '';
+        els.inventoryFilterStatus.textContent = text;
       }
 
       function queueInventoryPriceChange(cardId){
