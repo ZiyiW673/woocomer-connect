@@ -3199,16 +3199,29 @@ add_action('wp_ajax_ptcgdm_manual_inventory_sync', function(){
 
   check_ajax_referer('ptcgdm_manual_inventory_sync', 'nonce');
 
-  $syncQueued = ptcgdm_trigger_inventory_sync();
+  $result = ptcgdm_run_inventory_sync_now();
 
-  if (!$syncQueued) {
-    wp_send_json_error('Unable to start inventory sync. Please try again.');
+  if ($result === true) {
+    wp_send_json_success([
+      'synced'  => true,
+      'message' => 'Inventory sync completed successfully.',
+    ]);
   }
 
-  wp_send_json_success([
-    'syncQueued' => true,
-    'message'    => 'Inventory sync queued. WooCommerce products will update shortly.',
-  ]);
+  if (is_wp_error($result)) {
+    $message = $result->get_error_message();
+    wp_send_json_error($message ? $message : 'Unable to sync inventory.');
+  }
+
+  $syncQueued = ptcgdm_trigger_inventory_sync();
+  if ($syncQueued) {
+    wp_send_json_success([
+      'syncQueued' => true,
+      'message'    => 'Inventory sync queued. WooCommerce products will update shortly.',
+    ]);
+  }
+
+  wp_send_json_error('Unable to start inventory sync. Please try again.');
 });
 
 function ptcgdm_handle_inventory_sync_async_request() {
@@ -5027,32 +5040,36 @@ function ptcgdm_trigger_inventory_sync() {
   return false;
 }
 
-function ptcgdm_run_inventory_sync_event() {
+function ptcgdm_run_inventory_sync_now() {
   if (ptcgdm_is_inventory_syncing()) {
-    return;
+    return new WP_Error('ptcgdm_sync_running', __('Inventory sync is already running. Please wait for it to finish.', 'ptcgdm'));
   }
 
   $dir = trailingslashit(ptcgdm_get_inventory_dir());
   $path = $dir . PTCGDM_INVENTORY_FILENAME;
 
-  if (!file_exists($path) || !is_readable($path)) {
-    return;
+  if (!file_exists($path)) {
+    return new WP_Error('ptcgdm_sync_missing', __('No saved inventory snapshot was found. Please save your inventory first.', 'ptcgdm'));
+  }
+
+  if (!is_readable($path)) {
+    return new WP_Error('ptcgdm_sync_unreadable', __('Inventory snapshot is not readable.', 'ptcgdm'));
   }
 
   $raw = @file_get_contents($path);
   if ($raw === false) {
-    return;
+    return new WP_Error('ptcgdm_sync_read_error', __('Unable to read the inventory snapshot.', 'ptcgdm'));
   }
 
   $raw = trim((string) $raw);
   if ($raw === '') {
     ptcgdm_sync_inventory_products([]);
-    return;
+    return true;
   }
 
   $data = json_decode($raw, true);
   if (!is_array($data)) {
-    return;
+    return new WP_Error('ptcgdm_sync_invalid', __('Inventory snapshot contains invalid data.', 'ptcgdm'));
   }
 
   $entries = [];
@@ -5061,6 +5078,12 @@ function ptcgdm_run_inventory_sync_event() {
   }
 
   ptcgdm_sync_inventory_products($entries);
+
+  return true;
+}
+
+function ptcgdm_run_inventory_sync_event() {
+  ptcgdm_run_inventory_sync_now();
 }
 
 add_action('ptcgdm_run_inventory_sync', 'ptcgdm_run_inventory_sync_event');
