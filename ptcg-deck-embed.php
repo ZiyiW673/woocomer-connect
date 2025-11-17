@@ -3098,6 +3098,25 @@ add_action('wp_ajax_ptcgdm_delete_inventory_card', function(){
   wp_send_json_success($response);
 });
 
+function ptcgdm_handle_inventory_sync_async_request() {
+  $token = isset($_REQUEST['token']) ? sanitize_text_field(wp_unslash($_REQUEST['token'])) : '';
+  $expected = ptcgdm_get_inventory_sync_async_token();
+  $tokens_match = ($token !== '' && $expected !== '')
+    ? (function_exists('hash_equals') ? hash_equals($expected, $token) : $expected === $token)
+    : false;
+
+  if (!$tokens_match) {
+    wp_send_json_error('Invalid token', 403);
+  }
+
+  ptcgdm_run_inventory_sync_event();
+
+  wp_send_json_success(['synced' => true]);
+}
+
+add_action('wp_ajax_ptcgdm_run_inventory_sync_async', 'ptcgdm_handle_inventory_sync_async_request');
+add_action('wp_ajax_nopriv_ptcgdm_run_inventory_sync_async', 'ptcgdm_handle_inventory_sync_async_request');
+
 function ptcgdm_lookup_card_preview($card_id){
   static $cache = [];
   $key = trim((string) $card_id);
@@ -4836,12 +4855,63 @@ function ptcgdm_queue_inventory_sync() {
   return false;
 }
 
-function ptcgdm_trigger_inventory_sync() {
-  $queued = ptcgdm_queue_inventory_sync();
-  if (!$queued && !ptcgdm_is_inventory_syncing()) {
-    ptcgdm_run_inventory_sync_event();
+function ptcgdm_get_inventory_sync_async_token() {
+  static $token = null;
+  if ($token !== null) {
+    return $token;
   }
-  return $queued;
+
+  if (!function_exists('wp_salt')) {
+    $token = '';
+    return $token;
+  }
+
+  $salt = wp_salt('nonce');
+  $token = substr(hash_hmac('sha256', 'ptcgdm_inventory_sync', $salt), 0, 32);
+
+  return $token;
+}
+
+function ptcgdm_launch_inventory_sync_async_request() {
+  if (!function_exists('wp_safe_remote_post') || !function_exists('admin_url')) {
+    return false;
+  }
+
+  $url = admin_url('admin-ajax.php');
+  if (!$url) {
+    return false;
+  }
+
+  $token = ptcgdm_get_inventory_sync_async_token();
+  if ($token === '') {
+    return false;
+  }
+
+  $args = [
+    'timeout'  => 0.01,
+    'blocking' => false,
+    'sslverify'=> apply_filters('https_local_ssl_verify', false),
+    'body'     => [
+      'action' => 'ptcgdm_run_inventory_sync_async',
+      'token'  => $token,
+    ],
+  ];
+
+  $response = wp_safe_remote_post($url, $args);
+
+  return !is_wp_error($response);
+}
+
+function ptcgdm_trigger_inventory_sync() {
+  if (ptcgdm_queue_inventory_sync()) {
+    return true;
+  }
+
+  if (ptcgdm_launch_inventory_sync_async_request()) {
+    return true;
+  }
+
+  return false;
 }
 
 function ptcgdm_run_inventory_sync_event() {
