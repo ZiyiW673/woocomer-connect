@@ -938,6 +938,7 @@ function ptcgdm_render_builder(array $config = []){
       };
       const deck=[]; const deckMap=new Map();
       let deckErrorMessage='';
+      let inventoryBufferLimitAlerted=false;
       const inventoryData = [];
       const inventorySavedMap = new Map();
       const inventoryBulkSelection = new Set();
@@ -979,7 +980,29 @@ function ptcgdm_render_builder(array $config = []){
       }
 
       function getInventoryBufferLimitMessage(){
-        return `The buffer can only hold ${INVENTORY_BUFFER_CARD_LIMIT} cards. Save or remove cards before adding more.`;
+        return `The buffer works best with ${INVENTORY_BUFFER_CARD_LIMIT} cards or fewer. Save or remove cards before adding more so every card syncs properly.`;
+      }
+
+      function isInventoryBufferLimitExceeded(){
+        return IS_INVENTORY && deck.length > INVENTORY_BUFFER_CARD_LIMIT;
+      }
+
+      function maybeAlertInventoryBufferLimit(){
+        if(!isInventoryBufferLimitExceeded()) return;
+        if(inventoryBufferLimitAlerted) return;
+        inventoryBufferLimitAlerted = true;
+        alert(getInventoryBufferLimitMessage());
+      }
+
+      function resetInventoryBufferLimitWarning(force = false){
+        if(!IS_INVENTORY) return;
+        if(force){
+          inventoryBufferLimitAlerted = false;
+          return;
+        }
+        if(!isInventoryBufferLimitExceeded()){
+          inventoryBufferLimitAlerted = false;
+        }
       }
 
       function getDeckNameValue(){
@@ -1811,6 +1834,7 @@ function ptcgdm_render_builder(array $config = []){
         const successes = [];
         let processed = 0;
         let totalAdded = 0;
+        let bufferLimitWarning = false;
         lines.forEach((line, idx)=>{
           const trimmed = line.trim();
           if(!trimmed) return;
@@ -1852,6 +1876,9 @@ function ptcgdm_render_builder(array $config = []){
             const cardName = getCardDisplayName(card) || parsed.name || `${parsed.setCodeDisplay} ${parsed.numberDisplay}`;
             const numberDisplay = getCardDisplayNumber(card) || parsed.numberDisplay;
             successes.push({qty: delta, name: cardName, code: parsed.setCodeDisplay, number: numberDisplay});
+            if(isInventoryBufferLimitExceeded()){
+              bufferLimitWarning = true;
+            }
         });
         if(totalAdded > 0){
           renderDeckTable();
@@ -1876,6 +1903,9 @@ function ptcgdm_render_builder(array $config = []){
         if(errors.length){
           const errorSummary = errors.length === 1 ? errors[0] : `${errors[0]} (+${errors.length-1} more)`;
           messageParts.push(errorSummary);
+        }
+        if(bufferLimitWarning){
+          messageParts.push(getInventoryBufferLimitMessage());
         }
         if(!messageParts.length){
           messageParts.push('No cards were added.');
@@ -2222,10 +2252,6 @@ function ptcgdm_render_builder(array $config = []){
           deck[idx].qty = next;
           return delta;
         }
-        if(IS_INVENTORY && deck.length >= INVENTORY_BUFFER_CARD_LIMIT){
-          setDeckError(getInventoryBufferLimitMessage());
-          return null;
-        }
         const initial = IS_INVENTORY ? clampBufferQty(safeQty) : Math.max(1, Math.min(60, safeQty));
         const index = deck.length;
         const entry = { id };
@@ -2250,6 +2276,7 @@ function ptcgdm_render_builder(array $config = []){
             sumInventoryVariantQuantities(entry);
             deck.push(entry);
             deckMap.set(id, index);
+            maybeAlertInventoryBufferLimit();
             return totalAssigned;
           }
           const variant = getInventoryVariant(entry, 'normal');
@@ -2261,9 +2288,16 @@ function ptcgdm_render_builder(array $config = []){
         }
         deck.push(entry);
         deckMap.set(id, index);
+        maybeAlertInventoryBufferLimit();
         return initial;
       }
-      function clearDeck(){ deck.length=0; deckMap.clear(); renderDeckTable(); updateJSON(); }
+      function clearDeck(){
+        deck.length=0;
+        deckMap.clear();
+        resetInventoryBufferLimitWarning(true);
+        renderDeckTable();
+        updateJSON();
+      }
       function renderInventoryDataTable(){
         if(!IS_INVENTORY || !els.inventoryBody) return;
         const defaultEmptyMessage = 'No inventory saved yet.';
@@ -2534,10 +2568,6 @@ function ptcgdm_render_builder(array $config = []){
           }
         }
         if(!replaced){
-          if(deck.length >= INVENTORY_BUFFER_CARD_LIMIT){
-            alert(getInventoryBufferLimitMessage());
-            return false;
-          }
           deck.push(entry);
         }
         deckMap.clear();
@@ -2546,6 +2576,7 @@ function ptcgdm_render_builder(array $config = []){
             deckMap.set(item.id, index);
           }
         });
+        maybeAlertInventoryBufferLimit();
         renderDeckTable();
         updateJSON();
         if(!els.deckBody) return;
@@ -2584,6 +2615,7 @@ function ptcgdm_render_builder(array $config = []){
                 deckMap.set(entry.id, idx);
               }
             });
+            resetInventoryBufferLimitWarning();
             renderDeckTable();
           }
         }
@@ -2754,7 +2786,7 @@ function ptcgdm_render_builder(array $config = []){
         if(queuedCount > 0){
           const label = queuedCount === 1 ? 'card' : 'cards';
           let message = `${queuedCount} ${label} added to the buffer for price updates.`;
-          if(queuedCount < selectedIds.length){
+          if(isInventoryBufferLimitExceeded()){
             message += ` ${getInventoryBufferLimitMessage()}`;
           }
           alert(message);
@@ -3045,6 +3077,7 @@ function ptcgdm_render_builder(array $config = []){
       }
       function renderDeckTable(){
         if(deck.length===0){
+          resetInventoryBufferLimitWarning(true);
           const emptyColspan = IS_INVENTORY ? (5 + INVENTORY_VARIANTS.length * 2 + 1) : 7;
           els.deckBody.innerHTML=`<tr><td colspan="${emptyColspan}" class="muted">No cards yet.</td></tr>`;
           els.deckTotals.textContent='0 cards';
@@ -3083,7 +3116,15 @@ function ptcgdm_render_builder(array $config = []){
         els.deckBody.querySelectorAll('tr').forEach(tr=>{
           const id=tr.getAttribute('data-id');
           tr.addEventListener('click',(ev)=>{ const act=ev.target?.getAttribute?.('data-act'); if(!act) return; const i=deckMap.get(id); if(i===undefined) return;
-            if(act==='remove'){ deck.splice(i,1); deckMap.clear(); deck.forEach((d,j)=>deckMap.set(d.id,j)); renderDeckTable(); updateJSON(); return; }
+            if(act==='remove'){
+              deck.splice(i,1);
+              deckMap.clear();
+              deck.forEach((d,j)=>deckMap.set(d.id,j));
+              resetInventoryBufferLimitWarning();
+              renderDeckTable();
+              updateJSON();
+              return;
+            }
             if(!IS_INVENTORY){
               if(act==='plus') deck[i].qty=adjustBufferQty(deck[i].qty, 1);
               else if(act==='minus') deck[i].qty=adjustBufferQty(deck[i].qty, -1);
@@ -3206,6 +3247,7 @@ function ptcgdm_render_builder(array $config = []){
             setInventoryData(entriesForSave);
             deck.length = 0;
             deckMap.clear();
+            resetInventoryBufferLimitWarning(true);
             renderDeckTable();
             updateJSON();
             await refreshInventoryData();
