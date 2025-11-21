@@ -6024,8 +6024,8 @@ function ptcgdm_queue_inventory_sync() {
   }
 
   if (function_exists('spawn_cron')) {
-    spawn_cron();
-    $spawn_triggered = true;
+    $spawn_result = spawn_cron();
+    $spawn_triggered = (!is_wp_error($spawn_result) && is_bool($spawn_result)) ? $spawn_result : false;
   }
 
   if ($event_scheduled || $spawn_triggered || ptcgdm_is_inventory_syncing()) {
