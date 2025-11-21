@@ -1833,7 +1833,8 @@ function ptcgdm_render_builder(array $config = []){
         const errors = [];
         const successes = [];
         let processed = 0;
-        let totalAdded = 0;
+        let totalDelta = 0;
+        let changedDeck = false;
         let bufferLimitWarning = false;
         lines.forEach((line, idx)=>{
           const trimmed = line.trim();
@@ -1867,20 +1868,21 @@ function ptcgdm_render_builder(array $config = []){
             errors.push(`Line ${idx+1}: ${message}`);
             return;
           }
-            if(delta === 0){
-              const maxLabel = `${parsed.setCodeDisplay} ${parsed.numberDisplay}`;
-              errors.push(`Line ${idx+1}: ${maxLabel} already at maximum quantity.`);
-              return;
-            }
-            totalAdded += delta;
-            const cardName = getCardDisplayName(card) || parsed.name || `${parsed.setCodeDisplay} ${parsed.numberDisplay}`;
-            const numberDisplay = getCardDisplayNumber(card) || parsed.numberDisplay;
-            successes.push({qty: delta, name: cardName, code: parsed.setCodeDisplay, number: numberDisplay});
-            if(isInventoryBufferLimitExceeded()){
-              bufferLimitWarning = true;
-            }
+          if(delta === 0){
+            const maxLabel = `${parsed.setCodeDisplay} ${parsed.numberDisplay}`;
+            errors.push(`Line ${idx+1}: ${maxLabel} already at maximum quantity.`);
+            return;
+          }
+          totalDelta += delta;
+          changedDeck = true;
+          const cardName = getCardDisplayName(card) || parsed.name || `${parsed.setCodeDisplay} ${parsed.numberDisplay}`;
+          const numberDisplay = getCardDisplayNumber(card) || parsed.numberDisplay;
+          successes.push({qty: delta, name: cardName, code: parsed.setCodeDisplay, number: numberDisplay});
+          if(isInventoryBufferLimitExceeded()){
+            bufferLimitWarning = true;
+          }
         });
-        if(totalAdded > 0){
+        if(changedDeck){
           renderDeckTable();
           updateJSON();
         }
@@ -1893,12 +1895,14 @@ function ptcgdm_render_builder(array $config = []){
         if(successes.length){
           let summary = successes.slice(0,3).map(entry=>{
             const identifier = entry.number ? `${entry.code} ${entry.number}` : entry.code;
-            return `${entry.qty}× ${entry.name} (${identifier})`;
+            const qtyLabel = entry.qty > 0 ? `+${entry.qty}` : `${entry.qty}`;
+            return `${qtyLabel}× ${entry.name} (${identifier})`;
           }).join(', ');
           if(successes.length > 3){
             summary += `, +${successes.length-3} more`;
           }
-          messageParts.push(`Added ${totalAdded} card${totalAdded===1?'':'s'}${summary ? `: ${summary}` : ''}.`);
+          const actionVerb = totalDelta > 0 ? 'Added' : 'Updated';
+          messageParts.push(`${actionVerb} ${successes.length} card${successes.length===1?'':'s'}${summary ? `: ${summary}` : ''}.`);
         }
         if(errors.length){
           const errorSummary = errors.length === 1 ? errors[0] : `${errors[0]} (+${errors.length-1} more)`;
