@@ -1917,6 +1917,7 @@ function ptcgdm_render_builder(array $config = []){
       function parseInventoryVariantQuantities(quantityTokens){
         const variantQuantities = {};
         let totalQty = 0;
+        let hasQuantities = false;
         const maxVariants = INVENTORY_VARIANTS.length;
         const extraTokens = Array.isArray(quantityTokens) ? quantityTokens.slice(maxVariants) : [];
         if(extraTokens.some(token => String(token || '').trim() !== '')){
@@ -1929,24 +1930,26 @@ function ptcgdm_render_builder(array $config = []){
           if(token === undefined || token === null) return;
           const normalised = String(token).trim();
           if(normalised === '') return;
+          hasQuantities = true;
           if(!/^[-+]?\d+(?:\.\d*)?$/.test(normalised)){
             quantityError = `Invalid quantity for ${label || key}.`;
             return;
           }
           const parsedQty = parseInt(normalised, 10);
-          if(Number.isNaN(parsedQty) || parsedQty < 0){
-            quantityError = `${label || key} quantity must be zero or greater.`;
+          if(Number.isNaN(parsedQty)){
+            quantityError = `Invalid quantity for ${label || key}.`;
             return;
           }
-          if(parsedQty > 0){
-            variantQuantities[key] = parsedQty;
-            totalQty += parsedQty;
+          const clampedQty = clampBufferQty(parsedQty);
+          if(clampedQty !== 0){
+            variantQuantities[key] = clampedQty;
           }
+          totalQty += clampedQty;
         });
         if(quantityError){
           return { error: quantityError };
         }
-        return { variantQuantities, totalQty };
+        return { variantQuantities, totalQty, hasQuantities };
       }
 
       function parseBulkLine(line){
@@ -1978,7 +1981,8 @@ function ptcgdm_render_builder(array $config = []){
           }
           let variantQuantities = quantityResult?.variantQuantities || {};
           let totalQty = quantityResult?.totalQty || 0;
-          if(totalQty === 0){
+          const hasExplicitQuantities = !!quantityResult?.hasQuantities;
+          if(!hasExplicitQuantities){
             const fallbackVariant = INVENTORY_VARIANTS[0]?.key || 'normal';
             if(fallbackVariant){
               variantQuantities = Object.assign({}, variantQuantities, { [fallbackVariant]: 1 });
@@ -2204,23 +2208,26 @@ function ptcgdm_render_builder(array $config = []){
         const hasVariantQuantities = IS_INVENTORY && variantQuantities && typeof variantQuantities === 'object';
         const variantDeltas = {};
         let requestedVariantTotal = 0;
+        let variantDeltaCount = 0;
         if(hasVariantQuantities){
           INVENTORY_VARIANTS.forEach(({ key })=>{
             if(!Object.prototype.hasOwnProperty.call(variantQuantities, key)) return;
             const rawValue = parseInt(variantQuantities[key], 10);
-            if(!Number.isFinite(rawValue) || rawValue <= 0) return;
+            if(!Number.isFinite(rawValue) || rawValue === 0) return;
             const safeValue = clampBufferQty(rawValue);
-            if(!Number.isFinite(safeValue) || safeValue <= 0) return;
+            if(!Number.isFinite(safeValue) || safeValue === 0) return;
             variantDeltas[key] = safeValue;
             requestedVariantTotal += safeValue;
+            variantDeltaCount++;
           });
         }
+        const useVariantDeltas = hasVariantQuantities && variantDeltaCount > 0;
         if(deckMap.has(id)){
           const idx = deckMap.get(id);
           if(idx === undefined) return null;
           if(IS_INVENTORY){
             const entry = deck[idx];
-            if(requestedVariantTotal > 0){
+            if(useVariantDeltas){
               let totalApplied = 0;
               INVENTORY_VARIANTS.forEach(({ key })=>{
                 if(!Object.prototype.hasOwnProperty.call(variantDeltas, key)) return;
@@ -2263,7 +2270,7 @@ function ptcgdm_render_builder(array $config = []){
               entry.variants[key] = { qty: 0, price: saved.price };
             }
           });
-          if(requestedVariantTotal > 0){
+          if(useVariantDeltas){
             let totalAssigned = 0;
             INVENTORY_VARIANTS.forEach(({ key })=>{
               if(!Object.prototype.hasOwnProperty.call(variantDeltas, key)) return;
