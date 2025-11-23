@@ -728,7 +728,13 @@ function ptcgdm_render_builder(array $config = []){
 
       <div class="row" style="margin-top:12px;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-          <button id="btnSaveDeck" class="btn secondary" disabled><?php echo esc_html($save_button_label); ?></button>
+          <div class="sync-control">
+            <button id="btnSaveDeck" class="btn secondary" disabled><?php echo esc_html($save_button_label); ?></button>
+            <div id="saveProgress" class="sync-progress" hidden aria-live="polite">
+              <div class="sync-progress-bar"></div>
+            </div>
+            <p id="saveProgressText" class="sync-progress-text" hidden aria-live="polite"></p>
+          </div>
           <?php if ($mode === 'inventory') : ?>
             <div class="sync-control">
               <button id="btnSyncInventory" class="btn secondary" data-syncing-label="Syncing…">Sync Products</button>
@@ -989,6 +995,8 @@ function ptcgdm_render_builder(array $config = []){
         inventoryBulkChangePrice: document.getElementById('inventoryBulkChangePrice'),
         inventoryBulkDelete: document.getElementById('inventoryBulkDelete'),
         inventorySelectedCount: document.getElementById('inventorySelectedCount'),
+        saveProgress: document.getElementById('saveProgress'),
+        saveProgressText: document.getElementById('saveProgressText'),
         syncProgress: document.getElementById('syncProgress'),
         syncProgressText: document.getElementById('syncProgressText')
       };
@@ -3336,11 +3344,36 @@ function ptcgdm_render_builder(array $config = []){
         return entries;
       }
 
+      function renderSaveProgress(message){
+        const textEl = els.saveProgressText;
+        if (!textEl) return;
+        const text = message ? String(message) : '';
+        if (text) {
+          textEl.textContent = text;
+          textEl.hidden = false;
+        } else {
+          textEl.textContent = '';
+          textEl.hidden = true;
+        }
+      }
+
+      function setSaveProgressVisible(visible){
+        const bar = els.saveProgress;
+        if (bar) {
+          bar.hidden = !visible;
+        }
+        if (!visible) {
+          renderSaveProgress('');
+        }
+      }
+
       async function saveDeck(){
         if (isSavingDeck) {
           return;
         }
         isSavingDeck = true;
+        setSaveProgressVisible(true);
+        renderSaveProgress(IS_INVENTORY ? 'Saving inventory…' : 'Saving…');
         const button = els.btnSaveDeck || null;
         const defaultLabel = button && button.dataset ? (button.dataset.defaultLabel || button.textContent || '') : '';
         if (button) {
@@ -3380,16 +3413,23 @@ function ptcgdm_render_builder(array $config = []){
           const url = j.data?.url || '';
           let extraNotice = '';
           if (IS_INVENTORY) {
+            const syncStatus = j.data?.syncStatus;
             if (j.data?.synced) {
-              const syncMsg = (j.data?.syncStatus && j.data.syncStatus.message) ? j.data.syncStatus.message : 'Inventory synced to WooCommerce.';
+              const syncMsg = (syncStatus && syncStatus.message) ? syncStatus.message : 'Inventory synced to WooCommerce.';
               extraNotice = `\n${syncMsg}`;
+              renderSaveProgress(syncMsg);
             } else if (j.data?.syncQueued) {
-              const syncStatus = j.data?.syncStatus;
               const queuedMsg = (syncStatus && syncStatus.message) ? syncStatus.message : 'Inventory sync queued in background.';
               extraNotice = `\n${queuedMsg}`;
+              renderSaveProgress(queuedMsg);
             } else if (j.data?.syncError) {
               extraNotice = `\nSync warning: ${j.data.syncError}`;
+              renderSaveProgress(j.data.syncError);
+            } else if (syncStatus && syncStatus.message) {
+              renderSaveProgress(syncStatus.message);
             }
+          } else {
+            renderSaveProgress('Saved.');
           }
           alert(success + url + extraNotice);
           if (IS_INVENTORY) {
@@ -3405,13 +3445,18 @@ function ptcgdm_render_builder(array $config = []){
               updateAddButton();
             }
           }
-        }catch(e){ alert('Save failed: ' + e.message); }
+        }catch(e){
+          const message = e && e.message ? e.message : e;
+          renderSaveProgress(message);
+          alert('Save failed: ' + message);
+        }
         finally {
           isSavingDeck = false;
           if (button) {
             button.textContent = defaultLabel;
             button.removeAttribute('data-saving');
           }
+          setSaveProgressVisible(false);
           updateDeckButtons();
         }
       }
