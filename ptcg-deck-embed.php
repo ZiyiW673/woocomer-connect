@@ -1142,7 +1142,9 @@ function ptcgdm_render_builder(array $config = []){
         const variantsSource = saved.variants && typeof saved.variants === 'object' ? saved.variants : {};
         const entry = { id: cardId, variants: {} };
         let hasData = false;
+        const knownKeys = new Set();
         INVENTORY_VARIANTS.forEach(({ key })=>{
+          knownKeys.add(key);
           const source = variantsSource[key];
           if(source && source.qty !== undefined){
             const parsedQty = clampBufferQty(source.qty);
@@ -1162,6 +1164,21 @@ function ptcgdm_render_builder(array $config = []){
             qty: 0,
             price: Number.isFinite(priceValue) ? priceValue : null,
           };
+        });
+        Object.keys(variantsSource).forEach((key)=>{
+          if(knownKeys.has(key)) return;
+          const source = variantsSource[key];
+          if(!source || typeof source !== 'object') return;
+          const qtyRaw = source.qty !== undefined ? source.qty : 0;
+          const qty = clampBufferQty(qtyRaw);
+          const priceValue = Number.isFinite(source.price) ? source.price : parsePriceValue(source.price);
+          if((Number.isFinite(qty) && qty !== 0) || Number.isFinite(priceValue)){
+            entry.variants[key] = { qty: Number.isFinite(qty) ? qty : 0 };
+            if(Number.isFinite(priceValue)){
+              entry.variants[key].price = priceValue;
+            }
+            hasData = true;
+          }
         });
         if(!hasData){
           return null;
@@ -3794,7 +3811,9 @@ function ptcgdm_render_builder(array $config = []){
             if(IS_INVENTORY){
               const record = { id, variants: {} };
               const variants = entryData.variants && typeof entryData.variants === 'object' ? entryData.variants : {};
+              const knownKeys = new Set();
               INVENTORY_VARIANTS.forEach(({ key })=>{
+                knownKeys.add(key);
                 const variant = variants[key];
                 if(!variant || typeof variant !== 'object') return;
                 const qtyRaw = variant.qty !== undefined ? variant.qty : 0;
@@ -3807,6 +3826,21 @@ function ptcgdm_render_builder(array $config = []){
                   target.price = priceValue;
                 }
                 cleanInventoryVariant(record, key);
+              });
+              Object.keys(variants).forEach((key)=>{
+                if(knownKeys.has(key)) return;
+                const variant = variants[key];
+                if(!variant || typeof variant !== 'object') return;
+                const qtyRaw = variant.qty !== undefined ? variant.qty : 0;
+                let qty = Number.isFinite(qtyRaw) ? qtyRaw : parseInt(qtyRaw, 10) || 0;
+                qty = clampBufferQty(qty);
+                const priceValue = Number.isFinite(variant.price) ? variant.price : parsePriceValue(variant.price);
+                if((qty !== 0) || Number.isFinite(priceValue)){
+                  record.variants[key] = { qty };
+                  if(Number.isFinite(priceValue)){
+                    record.variants[key].price = priceValue;
+                  }
+                }
               });
               if(Object.keys(record.variants).length === 0){
                 const fallbackQty = clampBufferQty(entryData.qty);
@@ -6487,7 +6521,9 @@ function ptcgdm_extract_inventory_variants_from_entry(array $entry) {
   if (!empty($entry['variants']) && is_array($entry['variants'])) {
     $source = $entry['variants'];
   }
+  $known_keys = [];
   foreach (ptcgdm_get_inventory_variant_labels() as $key => $label) {
+    $known_keys[] = $key;
     $data = [];
     if (isset($source[$key]) && is_array($source[$key])) {
       $data = $source[$key];
@@ -6504,6 +6540,30 @@ function ptcgdm_extract_inventory_variants_from_entry(array $entry) {
       $variants[$key] = ['qty' => $qty];
       if ($price !== null) {
         $variants[$key]['price'] = $price;
+      }
+    }
+  }
+  if (!empty($source) && is_array($source)) {
+    foreach ($source as $key => $data) {
+      if (in_array($key, $known_keys, true)) {
+        continue;
+      }
+      if (!is_array($data)) {
+        continue;
+      }
+      $qty = ptcgdm_normalize_inventory_quantity($data['qty'] ?? 0);
+      if ($qty < 0) {
+        $qty = 0;
+      }
+      $price = null;
+      if (array_key_exists('price', $data)) {
+        $price = ptcgdm_normalize_inventory_price($data['price']);
+      }
+      if ($qty > 0 || $price !== null) {
+        $variants[$key] = ['qty' => $qty];
+        if ($price !== null) {
+          $variants[$key]['price'] = $price;
+        }
       }
     }
   }
@@ -7536,6 +7596,20 @@ function ptcgdm_update_inventory_card_quantity($card_id, $quantity, ?array $vari
       $new_variants[$key] = ['qty' => $qty];
       if ($price !== null) {
         $new_variants[$key]['price'] = $price;
+      }
+    }
+  }
+
+  foreach ($existing_variants as $key => $variant) {
+    if (array_key_exists($key, $new_variants)) {
+      continue;
+    }
+    $qty_value = max(0, (int) ($variant['qty'] ?? 0));
+    $price_value = array_key_exists('price', $variant) ? ptcgdm_normalize_inventory_price($variant['price']) : null;
+    if ($qty_value > 0 || $price_value !== null) {
+      $new_variants[$key] = ['qty' => $qty_value];
+      if ($price_value !== null) {
+        $new_variants[$key]['price'] = $price_value;
       }
     }
   }
