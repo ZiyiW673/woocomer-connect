@@ -3250,8 +3250,17 @@ function ptcgdm_render_builder(array $config = []){
           const success = SAVE_CONFIG.successMessage || 'Saved!\n';
           const url = j.data?.url || '';
           let extraNotice = '';
-          if (IS_INVENTORY && j.data?.syncQueued) {
-            extraNotice = '\nInventory sync queued in background.';
+          if (IS_INVENTORY) {
+            if (j.data?.synced) {
+              const syncMsg = (j.data?.syncStatus && j.data.syncStatus.message) ? j.data.syncStatus.message : 'Inventory synced to WooCommerce.';
+              extraNotice = `\n${syncMsg}`;
+            } else if (j.data?.syncQueued) {
+              const syncStatus = j.data?.syncStatus;
+              const queuedMsg = (syncStatus && syncStatus.message) ? syncStatus.message : 'Inventory sync queued in background.';
+              extraNotice = `\n${queuedMsg}`;
+            } else if (j.data?.syncError) {
+              extraNotice = `\nSync warning: ${j.data.syncError}`;
+            }
           }
           alert(success + url + extraNotice);
           if (IS_INVENTORY) {
@@ -3895,12 +3904,36 @@ add_action('wp_ajax_ptcgdm_save_inventory', function(){
   $path = $dir . PTCGDM_INVENTORY_FILENAME;
   if (file_put_contents($path, $content) === false) wp_send_json_error('Write failed');
 
-  $syncQueued = ptcgdm_trigger_inventory_sync();
+  $syncQueued = false;
+  $syncStatus = [];
+  $syncError = '';
+
+  $syncResult = ptcgdm_run_inventory_sync_now();
+  if ($syncResult === true) {
+    $syncStatus = ptcgdm_get_inventory_sync_status();
+  } else {
+    $syncQueued = ptcgdm_trigger_inventory_sync();
+    if (is_wp_error($syncResult)) {
+      $syncError = $syncResult->get_error_message();
+    }
+    if ($syncQueued) {
+      $syncStatus = ptcgdm_get_inventory_sync_status();
+    }
+  }
 
   $url = trailingslashit(ptcgdm_get_inventory_url()) . rawurlencode(PTCGDM_INVENTORY_FILENAME);
   $response = ['url' => $url, 'path' => $path];
   if ($syncQueued) {
     $response['syncQueued'] = true;
+  }
+  if (!empty($syncStatus)) {
+    $response['syncStatus'] = $syncStatus;
+  }
+  if ($syncError !== '') {
+    $response['syncError'] = $syncError;
+  }
+  if ($syncResult === true) {
+    $response['synced'] = true;
   }
   wp_send_json_success($response);
 });
