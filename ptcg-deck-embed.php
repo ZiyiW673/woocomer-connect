@@ -1119,7 +1119,7 @@ function ptcgdm_render_builder(array $config = []){
       function cloneInventoryVariantData(source){
         if(!source || typeof source !== 'object') return null;
         const out = {};
-        INVENTORY_VARIANTS.forEach(({ key })=>{
+        Object.keys(source).forEach((key)=>{
           const value = source[key];
           if(!value || typeof value !== 'object') return;
           const qty = Number.isFinite(value.qty) ? value.qty : parseInt(value.qty, 10);
@@ -1127,9 +1127,7 @@ function ptcgdm_render_builder(array $config = []){
           const includeQty = Number.isFinite(qty);
           const includePrice = Number.isFinite(price);
           if(!includeQty && !includePrice) return;
-          out[key] = {
-            qty: includeQty ? qty : 0,
-          };
+          out[key] = { qty: includeQty ? qty : 0 };
           if(includePrice){
             out[key].price = price;
           }
@@ -1176,7 +1174,18 @@ function ptcgdm_render_builder(array $config = []){
         if(!entry) return 0;
         const variants = entry.variants && typeof entry.variants === 'object' ? entry.variants : {};
         let total = 0;
+        const knownKeys = new Set();
         INVENTORY_VARIANTS.forEach(({ key })=>{
+          knownKeys.add(key);
+          const value = variants[key];
+          if(!value || typeof value !== 'object') return;
+          const qty = Number.isFinite(value.qty) ? value.qty : parseInt(value.qty, 10);
+          if(Number.isFinite(qty)){
+            total += qty;
+          }
+        });
+        Object.keys(variants).forEach((key)=>{
+          if(knownKeys.has(key)) return;
           const value = variants[key];
           if(!value || typeof value !== 'object') return;
           const qty = Number.isFinite(value.qty) ? value.qty : parseInt(value.qty, 10);
@@ -2869,7 +2878,9 @@ function ptcgdm_render_builder(array $config = []){
             const variants = entry.variants && typeof entry.variants === 'object' ? entry.variants : {};
             const record = { id, variants: {} };
             let totalQty = 0;
-            INVENTORY_VARIANTS.forEach(({ key })=>{
+            const variantKeys = new Set(INVENTORY_VARIANTS.map(({ key })=>key));
+            Object.keys(variants).forEach(key => variantKeys.add(key));
+            variantKeys.forEach((key)=>{
               const variant = variants[key];
               if(!variant || typeof variant !== 'object') return;
               const qtyRaw = variant.qty !== undefined ? variant.qty : 0;
@@ -2902,16 +2913,18 @@ function ptcgdm_render_builder(array $config = []){
         renderInventoryDataTable();
       }
       function normalizeInventoryEntry(entry, options = {}){
-        const { allowNegative = false } = options;
+        const { allowNegative = false, preserveUnknown = true } = options;
         if(!entry || typeof entry !== 'object') return null;
         const rawId = entry.id !== undefined ? entry.id : entry.cardId || entry.card_id || entry.cardID || entry.identifier;
         const id = String(rawId || '').trim();
         if(!id) return null;
         const result = { id, variants: {} };
         let hasData = false;
-        const variants = entry.variants && typeof entry.variants === 'object' ? entry.variants : null;
+        const rawVariants = entry.variants && typeof entry.variants === 'object' ? entry.variants : null;
+        const knownKeys = new Set();
         INVENTORY_VARIANTS.forEach(({ key })=>{
-          const source = variants && typeof variants[key] === 'object' ? variants[key] : null;
+          knownKeys.add(key);
+          const source = rawVariants && typeof rawVariants[key] === 'object' ? rawVariants[key] : null;
           let qty = null;
           let price = null;
           if(source){
@@ -2950,6 +2963,41 @@ function ptcgdm_render_builder(array $config = []){
             }
           }
         });
+        if(preserveUnknown && rawVariants && typeof rawVariants === 'object'){
+          Object.keys(rawVariants).forEach((key)=>{
+            if(knownKeys.has(key)) return;
+            const source = rawVariants[key];
+            if(!source || typeof source !== 'object') return;
+            let qty = null;
+            let price = null;
+            if(typeof source.qty === 'number' && Number.isFinite(source.qty)){
+              qty = source.qty;
+            }else if(source.qty !== undefined){
+              const parsedQty = parseInt(source.qty, 10);
+              if(!Number.isNaN(parsedQty)) qty = parsedQty;
+            }
+            if(source.price !== undefined){
+              const parsedPrice = parsePriceValue(source.price);
+              if(Number.isFinite(parsedPrice)) price = parsedPrice;
+            }
+            const hasQty = Number.isFinite(qty);
+            const hasPrice = Number.isFinite(price);
+            if(allowNegative){
+              if((hasQty && qty !== 0) || hasPrice){
+                result.variants[key] = { qty: hasQty ? qty : 0 };
+                if(hasPrice) result.variants[key].price = price;
+                hasData = true;
+              }
+            }else{
+              if((hasQty && qty > 0) || hasPrice){
+                const safeQty = hasQty ? Math.max(0, qty) : 0;
+                result.variants[key] = { qty: safeQty };
+                if(hasPrice) result.variants[key].price = price;
+                hasData = true;
+              }
+            }
+          });
+        }
         if(!hasData){
           let qty = null;
           if(entry.qty !== undefined){
@@ -2994,7 +3042,9 @@ function ptcgdm_render_builder(array $config = []){
             const normalized = normalizeInventoryEntry(entry, { allowNegative: false });
             if(!normalized) return;
             const record = getRecord(normalized.id);
-            INVENTORY_VARIANTS.forEach(({ key })=>{
+            const variantKeys = new Set(INVENTORY_VARIANTS.map(({ key })=>key));
+            Object.keys(normalized.variants || {}).forEach(key => variantKeys.add(key));
+            variantKeys.forEach((key)=>{
               const variant = normalized.variants[key];
               if(!variant) return;
               const current = record.variants[key] && typeof record.variants[key] === 'object' ? record.variants[key] : { qty: 0, price: null };
@@ -3022,7 +3072,9 @@ function ptcgdm_render_builder(array $config = []){
             const normalized = normalizeInventoryEntry(entry, { allowNegative: true });
             if(!normalized) return;
             const record = getRecord(normalized.id);
-            INVENTORY_VARIANTS.forEach(({ key })=>{
+            const variantKeys = new Set(INVENTORY_VARIANTS.map(({ key })=>key));
+            Object.keys(normalized.variants || {}).forEach(key => variantKeys.add(key));
+            variantKeys.forEach((key)=>{
               const variant = normalized.variants[key];
               if(!variant) return;
               const current = record.variants[key] && typeof record.variants[key] === 'object' ? record.variants[key] : { qty: 0, price: null };
@@ -3051,7 +3103,9 @@ function ptcgdm_render_builder(array $config = []){
           const variantsOut = {};
           let totalQty = 0;
           let firstPrice = null;
-          INVENTORY_VARIANTS.forEach(({ key })=>{
+          const variantKeys = new Set(INVENTORY_VARIANTS.map(({ key })=>key));
+          Object.keys(record.variants || {}).forEach(key => variantKeys.add(key));
+          variantKeys.forEach((key)=>{
             const data = record.variants[key];
             if(!data || typeof data !== 'object') return;
             const qty = Number.isFinite(data.qty) ? data.qty : parseInt(data.qty, 10) || 0;
