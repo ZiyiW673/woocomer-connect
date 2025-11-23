@@ -243,12 +243,61 @@ function ptcgdm_sanitize_json_filename($filename) {
   }
   return $filename;
 }
+function ptcgdm_normalize_inventory_dataset_key($dataset_key = '') {
+  $key = strtolower(trim((string) $dataset_key));
+  $definitions = ptcgdm_get_dataset_definitions();
+  if (!isset($definitions[$key])) {
+    $key = 'pokemon';
+  }
+  return $key;
+}
+
+function ptcgdm_slugify_inventory_dataset_key($dataset_key = '') {
+  $key = ptcgdm_normalize_inventory_dataset_key($dataset_key);
+  $slug = preg_replace('/[^a-z0-9]+/i', '-', $key);
+  $slug = trim((string) $slug, '-');
+  return $slug !== '' ? strtolower($slug) : 'inventory';
+}
+
+function ptcgdm_get_inventory_filename_for_dataset($dataset_key = '') {
+  $key = ptcgdm_normalize_inventory_dataset_key($dataset_key);
+  if ($key === 'pokemon') {
+    return PTCGDM_INVENTORY_FILENAME;
+  }
+
+  $slug = ptcgdm_slugify_inventory_dataset_key($key);
+  return sprintf('card-inventory-%s.json', $slug);
+}
+
 function ptcgdm_get_inventory_dir() {
   return PTCGDM_DIR . PTCGDM_INVENTORY_SUBDIR;
 }
 
 function ptcgdm_get_inventory_url() {
   return PTCGDM_URL . PTCGDM_INVENTORY_SUBDIR;
+}
+
+function ptcgdm_get_inventory_path_for_dataset($dataset_key = '') {
+  $dir = trailingslashit(ptcgdm_get_inventory_dir());
+  return $dir . ptcgdm_get_inventory_filename_for_dataset($dataset_key);
+}
+
+function ptcgdm_get_inventory_url_for_dataset($dataset_key = '') {
+  $url = trailingslashit(ptcgdm_get_inventory_url());
+  return $url . rawurlencode(ptcgdm_get_inventory_filename_for_dataset($dataset_key));
+}
+
+function ptcgdm_resolve_inventory_dataset_key($value = null) {
+  if (is_array($value)) {
+    foreach (['dataset', 'dataset_key', 'datasetKey'] as $candidate) {
+      if (isset($value[$candidate])) {
+        return ptcgdm_normalize_inventory_dataset_key($value[$candidate]);
+      }
+    }
+    return 'pokemon';
+  }
+
+  return ptcgdm_normalize_inventory_dataset_key($value);
 }
 
 function ptcgdm_ensure_inventory_directory() {
@@ -397,6 +446,13 @@ function ptcgdm_render_builder(array $config = []){
 
   $dir = ptcgdm_ensure_inventory_directory();
   $url_base = ptcgdm_get_inventory_url();
+  $inventory_filename = ptcgdm_get_inventory_filename_for_dataset($dataset_key);
+  $inventory_label = 'Card Inventory';
+  if ($dataset_key === 'one_piece') {
+    $inventory_label = 'One Piece Inventory';
+  } elseif ($dataset_key !== 'pokemon') {
+    $inventory_label = sprintf('%s Inventory', $page_title);
+  }
   $load_label = 'Load Saved Inventory';
   $select_placeholder = 'Choose saved inventory…';
   $load_button_label = 'Load Inventory';
@@ -409,21 +465,21 @@ function ptcgdm_render_builder(array $config = []){
   $save_action = 'ptcgdm_save_inventory';
   $nonce_action = 'ptcgdm_save_inventory';
   $filename_pattern = '%s.json';
-  $fixed_filename = PTCGDM_INVENTORY_FILENAME;
-  $default_basename = 'card-inventory';
-  $force_option_label = 'Card Inventory';
+  $fixed_filename = $inventory_filename;
+  $default_basename = substr($inventory_filename, 0, -5);
+  $force_option_label = $inventory_label;
   $fallback_entity_label = 'inventory';
   $loading_message = 'Loading inventory…';
   $save_success_message = "Inventory updated!\nURL:\n";
   $default_entry_name = 'Untitled Inventory';
   $saved_args = [
-    'filenames' => [PTCGDM_INVENTORY_FILENAME],
-    'label_map' => [PTCGDM_INVENTORY_FILENAME => 'Card Inventory'],
+    'filenames' => [$inventory_filename],
+    'label_map' => [$inventory_filename => $inventory_label],
   ];
-  $inventory_path = trailingslashit($dir) . PTCGDM_INVENTORY_FILENAME;
+  $inventory_path = ptcgdm_get_inventory_path_for_dataset($dataset_key);
   $auto_load_url = '';
   if (file_exists($inventory_path)) {
-    $auto_load_url = trailingslashit($url_base) . rawurlencode(PTCGDM_INVENTORY_FILENAME);
+    $auto_load_url = ptcgdm_get_inventory_url_for_dataset($dataset_key);
   }
 
   $saved_decks = ptcgdm_collect_saved_entries($dir, $url_base, $saved_args);
@@ -769,7 +825,7 @@ function ptcgdm_render_builder(array $config = []){
         saveAction: 'ptcgdm_save_inventory',
         defaultBasename: 'card-inventory',
         filenamePattern: '%s.json',
-        fixedFilename: '<?php echo esc_js(PTCGDM_INVENTORY_FILENAME); ?>',
+        fixedFilename: '<?php echo esc_js($inventory_filename); ?>',
         successMessage: 'Inventory updated!\nURL:\n',
         loadButtonLabel: 'Load Inventory',
         loadingMessage: 'Loading inventory…',
@@ -2685,6 +2741,7 @@ function ptcgdm_render_builder(array $config = []){
         payload.append('action', action);
         payload.append('nonce', nonce);
         payload.append('cardId', cardId);
+        payload.append('datasetKey', DATASET_KEY);
         try {
           const response = await fetch(AJAX_URL, { method: 'POST', body: payload });
           if(!response.ok){
@@ -3307,6 +3364,7 @@ function ptcgdm_render_builder(array $config = []){
         const body=new FormData();
         body.append('action', SAVE_CONFIG.saveAction || 'ptcgdm_save_inventory');
         body.append('nonce', SAVE_NONCE);
+        body.append('datasetKey', DATASET_KEY);
         body.append('filename', filename);
         const entriesForSave = updateJSON();
         body.append('content', deckJsonCache);
@@ -3382,6 +3440,7 @@ function ptcgdm_render_builder(array $config = []){
           const payload = new FormData();
           payload.append('action', action);
           payload.append('nonce', nonce);
+          payload.append('datasetKey', DATASET_KEY);
           const response = await fetch(AJAX_URL, { method: 'POST', body: payload });
           if (!response.ok) {
             throw new Error(`HTTP ${response.status}`);
@@ -3638,6 +3697,7 @@ function ptcgdm_render_builder(array $config = []){
         const body = new FormData();
         body.append('action', action);
         body.append('nonce', nonce);
+        body.append('datasetKey', DATASET_KEY);
         if (manualSyncRunId) {
           body.append('runId', manualSyncRunId);
         }
@@ -3979,6 +4039,8 @@ add_action('wp_ajax_ptcgdm_save_inventory', function(){
   if (!current_user_can('manage_options')) wp_send_json_error('Permission denied', 403);
   check_ajax_referer('ptcgdm_save_inventory', 'nonce');
 
+  $dataset_key = ptcgdm_resolve_inventory_dataset_key($_POST);
+
   $content = wp_unslash($_POST['content'] ?? '');
   if (!$content) wp_send_json_error('Empty content');
 
@@ -3989,28 +4051,28 @@ add_action('wp_ajax_ptcgdm_save_inventory', function(){
   if (!file_exists($dir) && !wp_mkdir_p($dir)) wp_send_json_error('Unable to create inventory directory');
   if (!is_writable($dir)) wp_send_json_error('Inventory directory not writable');
 
-  $path = $dir . PTCGDM_INVENTORY_FILENAME;
+  $path = ptcgdm_get_inventory_path_for_dataset($dataset_key);
   if (file_put_contents($path, $content) === false) wp_send_json_error('Write failed');
 
   $syncQueued = false;
   $syncStatus = [];
   $syncError = '';
 
-  $syncResult = ptcgdm_run_inventory_sync_now();
+  $syncResult = ptcgdm_run_inventory_sync_now(['dataset' => $dataset_key]);
   if ($syncResult === true) {
-    $syncStatus = ptcgdm_get_inventory_sync_status();
+    $syncStatus = ptcgdm_get_inventory_sync_status($dataset_key);
   } else {
-    $syncQueued = ptcgdm_trigger_inventory_sync();
+    $syncQueued = ptcgdm_trigger_inventory_sync($dataset_key);
     if (is_wp_error($syncResult)) {
       $syncError = $syncResult->get_error_message();
     }
     if ($syncQueued) {
-      $syncStatus = ptcgdm_get_inventory_sync_status();
+      $syncStatus = ptcgdm_get_inventory_sync_status($dataset_key);
     }
   }
 
-  $url = trailingslashit(ptcgdm_get_inventory_url()) . rawurlencode(PTCGDM_INVENTORY_FILENAME);
-  $response = ['url' => $url, 'path' => $path];
+  $url = ptcgdm_get_inventory_url_for_dataset($dataset_key);
+  $response = ['url' => $url, 'path' => $path, 'dataset' => $dataset_key];
   if ($syncQueued) {
     $response['syncQueued'] = true;
   }
@@ -4033,6 +4095,8 @@ add_action('wp_ajax_ptcgdm_delete_inventory_card', function(){
 
   check_ajax_referer('ptcgdm_delete_inventory_card', 'nonce');
 
+  $dataset_key = ptcgdm_resolve_inventory_dataset_key($_POST);
+
   $card_id = '';
   foreach (['cardId', 'card_id', 'id'] as $key) {
     if (isset($_POST[$key])) {
@@ -4046,7 +4110,7 @@ add_action('wp_ajax_ptcgdm_delete_inventory_card', function(){
     wp_send_json_error('Missing card ID', 400);
   }
 
-  $remove_result = ptcgdm_remove_inventory_card_entry($card_id);
+  $remove_result = ptcgdm_remove_inventory_card_entry($card_id, $dataset_key);
   if (is_wp_error($remove_result)) {
     wp_send_json_error($remove_result->get_error_message());
   }
@@ -4064,7 +4128,7 @@ add_action('wp_ajax_ptcgdm_delete_inventory_card', function(){
     $message .= ' WooCommerce product deleted.';
   }
 
-  $syncQueued = ptcgdm_trigger_inventory_sync();
+  $syncQueued = ptcgdm_trigger_inventory_sync($dataset_key);
 
   $response = [
     'cardId'         => $card_id,
@@ -4073,6 +4137,7 @@ add_action('wp_ajax_ptcgdm_delete_inventory_card', function(){
     'productDeleted' => !empty($product_result['deleted']),
     'productId'      => isset($product_result['product_id']) ? (int) $product_result['product_id'] : 0,
     'message'        => $message,
+    'dataset'        => $dataset_key,
   ];
 
   if ($syncQueued) {
@@ -4089,8 +4154,10 @@ add_action('wp_ajax_ptcgdm_manual_inventory_sync', function(){
 
   check_ajax_referer('ptcgdm_manual_inventory_sync', 'nonce');
 
+  $dataset_key = ptcgdm_resolve_inventory_dataset_key($_POST);
+
   if (ptcgdm_is_inventory_syncing()) {
-    $status = ptcgdm_get_inventory_sync_status();
+    $status = ptcgdm_get_inventory_sync_status($dataset_key);
     $message = $status['message'] ?: __('Inventory sync is already running. Please wait for it to finish.', 'ptcgdm');
     wp_send_json_error([
       'message' => $message,
@@ -4102,22 +4169,23 @@ add_action('wp_ajax_ptcgdm_manual_inventory_sync', function(){
   $queued_message = __('Inventory sync queued. WooCommerce products will update shortly.', 'ptcgdm');
   ptcgdm_set_inventory_sync_status('queued', $queued_message, ptcgdm_build_inventory_sync_status_extra($run_id, [
     'result' => '',
-  ]));
+    'dataset' => $dataset_key,
+  ]), $dataset_key);
 
-  $syncQueued = ptcgdm_trigger_inventory_sync();
+  $syncQueued = ptcgdm_trigger_inventory_sync($dataset_key);
   if ($syncQueued) {
     wp_send_json_success([
       'queued'  => true,
       'syncQueued' => true,
       'message' => $queued_message,
-      'status'  => ptcgdm_get_inventory_sync_status(),
+      'status'  => ptcgdm_get_inventory_sync_status($dataset_key),
     ]);
   }
 
-  $result = ptcgdm_run_inventory_sync_now(['run_id' => $run_id]);
+  $result = ptcgdm_run_inventory_sync_now(['run_id' => $run_id, 'dataset' => $dataset_key]);
 
   if ($result === true) {
-    $status = ptcgdm_get_inventory_sync_status();
+    $status = ptcgdm_get_inventory_sync_status($dataset_key);
     wp_send_json_success([
       'synced'  => true,
       'message' => $status['message'] ?: __('Inventory sync completed successfully.', 'ptcgdm'),
@@ -4126,7 +4194,7 @@ add_action('wp_ajax_ptcgdm_manual_inventory_sync', function(){
   }
 
   if (is_wp_error($result)) {
-    $status = ptcgdm_get_inventory_sync_status();
+    $status = ptcgdm_get_inventory_sync_status($dataset_key);
     $message = $result->get_error_message();
     wp_send_json_error([
       'message' => $message ? $message : __('Unable to sync inventory.', 'ptcgdm'),
@@ -4136,7 +4204,7 @@ add_action('wp_ajax_ptcgdm_manual_inventory_sync', function(){
 
   wp_send_json_error([
     'message' => __('Unable to start inventory sync. Please try again.', 'ptcgdm'),
-    'status'  => ptcgdm_get_inventory_sync_status(),
+    'status'  => ptcgdm_get_inventory_sync_status($dataset_key),
   ]);
 });
 
@@ -4147,7 +4215,8 @@ add_action('wp_ajax_ptcgdm_get_inventory_sync_status', function(){
 
   check_ajax_referer('ptcgdm_get_inventory_sync_status', 'nonce');
 
-  $status = ptcgdm_get_inventory_sync_status();
+  $dataset_key = ptcgdm_resolve_inventory_dataset_key($_POST);
+  $status = ptcgdm_get_inventory_sync_status($dataset_key);
 
   wp_send_json_success([
     'status' => $status,
@@ -4165,6 +4234,8 @@ function ptcgdm_handle_inventory_sync_async_request() {
     wp_send_json_error('Invalid token', 403);
   }
 
+  $dataset_key = ptcgdm_resolve_inventory_dataset_key($_REQUEST);
+  ptcgdm_set_active_inventory_dataset($dataset_key);
   ptcgdm_run_inventory_sync_event();
 
   wp_send_json_success(['synced' => true]);
@@ -5879,11 +5950,17 @@ function ptcgdm_set_inventory_syncing($flag) {
   }
 }
 
-function ptcgdm_get_inventory_sync_status_option_name() {
-  return 'ptcgdm_inventory_sync_status';
+function ptcgdm_get_inventory_sync_status_option_name($dataset_key = '') {
+  $normalized = ptcgdm_normalize_inventory_dataset_key($dataset_key);
+  if ($normalized === 'pokemon') {
+    return 'ptcgdm_inventory_sync_status';
+  }
+
+  $slug = ptcgdm_slugify_inventory_dataset_key($normalized);
+  return sprintf('ptcgdm_inventory_sync_status_%s', $slug);
 }
 
-function ptcgdm_get_inventory_sync_status_defaults() {
+function ptcgdm_get_inventory_sync_status_defaults($dataset_key = '') {
   return [
     'state'   => 'idle',
     'message' => '',
@@ -5895,17 +5972,19 @@ function ptcgdm_get_inventory_sync_status_defaults() {
     'card_index' => 0,
     'current_card_label' => '',
     'last_run'=> [],
+    'dataset' => ptcgdm_normalize_inventory_dataset_key($dataset_key),
   ];
 }
 
-function ptcgdm_get_inventory_sync_status() {
-  $option_name = ptcgdm_get_inventory_sync_status_option_name();
+function ptcgdm_get_inventory_sync_status($dataset_key = '') {
+  $normalized_dataset = ptcgdm_normalize_inventory_dataset_key($dataset_key);
+  $option_name = ptcgdm_get_inventory_sync_status_option_name($normalized_dataset);
   $stored = get_option($option_name, []);
   if (!is_array($stored)) {
     $stored = [];
   }
 
-  $defaults = ptcgdm_get_inventory_sync_status_defaults();
+  $defaults = ptcgdm_get_inventory_sync_status_defaults($normalized_dataset);
   $status = array_merge($defaults, $stored);
   $state = isset($status['state']) ? strtolower(trim((string) $status['state'])) : 'idle';
   $status['state'] = $state !== '' ? $state : 'idle';
@@ -5917,6 +5996,7 @@ function ptcgdm_get_inventory_sync_status() {
   $status['total_count'] = isset($status['total_count']) && is_numeric($status['total_count']) ? max(0, (int) $status['total_count']) : 0;
   $status['card_index'] = isset($status['card_index']) && is_numeric($status['card_index']) ? max(0, (int) $status['card_index']) : 0;
   $status['current_card_label'] = isset($status['current_card_label']) && is_string($status['current_card_label']) ? $status['current_card_label'] : '';
+  $status['dataset'] = ptcgdm_normalize_inventory_dataset_key(isset($status['dataset']) ? $status['dataset'] : $normalized_dataset);
 
   $last_run = [];
   if (!empty($status['last_run']) && is_array($status['last_run'])) {
@@ -5934,8 +6014,9 @@ function ptcgdm_get_inventory_sync_status() {
   return $status;
 }
 
-function ptcgdm_set_inventory_sync_status($state, $message = '', array $extra = []) {
-  $status = ptcgdm_get_inventory_sync_status();
+function ptcgdm_set_inventory_sync_status($state, $message = '', array $extra = [], $dataset_key = '') {
+  $normalized_dataset = ptcgdm_normalize_inventory_dataset_key($dataset_key !== '' ? $dataset_key : (isset($extra['dataset']) ? $extra['dataset'] : ''));
+  $status = ptcgdm_get_inventory_sync_status($normalized_dataset);
   $state = strtolower(trim((string) $state));
   if ($state === '') {
     $state = 'idle';
@@ -6000,6 +6081,12 @@ function ptcgdm_set_inventory_sync_status($state, $message = '', array $extra = 
     $status['current_card_label'] = '';
   }
 
+  if (isset($extra['dataset']) && is_string($extra['dataset'])) {
+    $status['dataset'] = ptcgdm_normalize_inventory_dataset_key($extra['dataset']);
+  } else {
+    $status['dataset'] = $normalized_dataset;
+  }
+
   if ($state !== 'running' && $label_value === null) {
     $status['current_card_label'] = '';
   }
@@ -6029,7 +6116,7 @@ function ptcgdm_set_inventory_sync_status($state, $message = '', array $extra = 
     ];
   }
 
-  update_option(ptcgdm_get_inventory_sync_status_option_name(), $status, false);
+  update_option(ptcgdm_get_inventory_sync_status_option_name($status['dataset']), $status, false);
 
   return $status;
 }
@@ -6042,6 +6129,7 @@ function ptcgdm_build_inventory_sync_status_extra($run_id = '', array $overrides
     'total_count' => 0,
     'card_index' => 0,
     'current_card_label' => '',
+    'dataset' => '',
   ];
 
   foreach ($overrides as $key => $value) {
@@ -6051,8 +6139,9 @@ function ptcgdm_build_inventory_sync_status_extra($run_id = '', array $overrides
   return $base;
 }
 
-function ptcgdm_set_inventory_sync_progress(array $progress = []) {
-  $status = ptcgdm_get_inventory_sync_status();
+function ptcgdm_set_inventory_sync_progress(array $progress = [], $dataset_key = '') {
+  $normalized_dataset = ptcgdm_normalize_inventory_dataset_key($dataset_key !== '' ? $dataset_key : (isset($progress['dataset']) ? $progress['dataset'] : ''));
+  $status = ptcgdm_get_inventory_sync_status($normalized_dataset);
   $state = isset($progress['state']) ? strtolower(trim((string) $progress['state'])) : '';
   if ($state === '' || $state === 'idle' || $state === 'queued') {
     $state = 'running';
@@ -6087,7 +6176,9 @@ function ptcgdm_set_inventory_sync_progress(array $progress = []) {
     $extra['current_card_label'] = $extra['currentCardLabel'];
   }
 
-  return ptcgdm_set_inventory_sync_status($state, $message, $extra);
+  $extra['dataset'] = $normalized_dataset;
+
+  return ptcgdm_set_inventory_sync_status($state, $message, $extra, $normalized_dataset);
 }
 
 function ptcgdm_should_update_inventory_sync_progress($processed_count, $total_count, $step = 5) {
@@ -6121,13 +6212,22 @@ function ptcgdm_generate_inventory_sync_run_id() {
   }
 }
 
+function ptcgdm_set_active_inventory_dataset($dataset_key = '') {
+  update_option('ptcgdm_inventory_sync_dataset', ptcgdm_normalize_inventory_dataset_key($dataset_key), false);
+}
+
+function ptcgdm_get_active_inventory_dataset() {
+  $stored = get_option('ptcgdm_inventory_sync_dataset', 'pokemon');
+  return ptcgdm_normalize_inventory_dataset_key($stored);
+}
+
 function ptcgdm_determine_inventory_sync_run_id($preferred = '') {
   $preferred = is_string($preferred) ? trim($preferred) : '';
   if ($preferred !== '') {
     return $preferred;
   }
 
-  $status = ptcgdm_get_inventory_sync_status();
+  $status = ptcgdm_get_inventory_sync_status(ptcgdm_get_active_inventory_dataset());
   if (!empty($status['run_id']) && in_array($status['state'], ['queued', 'running'], true)) {
     return $status['run_id'];
   }
@@ -6135,7 +6235,8 @@ function ptcgdm_determine_inventory_sync_run_id($preferred = '') {
   return ptcgdm_generate_inventory_sync_run_id();
 }
 
-function ptcgdm_queue_inventory_sync() {
+function ptcgdm_queue_inventory_sync($dataset_key = '') {
+  ptcgdm_set_active_inventory_dataset($dataset_key);
   $hook = 'ptcgdm_run_inventory_sync';
   $event_scheduled = false;
   $spawn_triggered = false;
@@ -6184,7 +6285,7 @@ function ptcgdm_get_inventory_sync_async_token() {
   return $token;
 }
 
-function ptcgdm_launch_inventory_sync_async_request() {
+function ptcgdm_launch_inventory_sync_async_request($dataset_key = '') {
   if (!function_exists('wp_safe_remote_post') || !function_exists('admin_url')) {
     return false;
   }
@@ -6199,6 +6300,9 @@ function ptcgdm_launch_inventory_sync_async_request() {
     return false;
   }
 
+  $dataset_key = ptcgdm_normalize_inventory_dataset_key($dataset_key);
+  ptcgdm_set_active_inventory_dataset($dataset_key);
+
   $args = [
     'timeout'  => 0.01,
     'blocking' => false,
@@ -6206,6 +6310,7 @@ function ptcgdm_launch_inventory_sync_async_request() {
     'body'     => [
       'action' => 'ptcgdm_run_inventory_sync_async',
       'token'  => $token,
+      'datasetKey' => $dataset_key,
     ],
   ];
 
@@ -6214,12 +6319,12 @@ function ptcgdm_launch_inventory_sync_async_request() {
   return !is_wp_error($response);
 }
 
-function ptcgdm_trigger_inventory_sync() {
-  if (ptcgdm_queue_inventory_sync()) {
+function ptcgdm_trigger_inventory_sync($dataset_key = '') {
+  if (ptcgdm_queue_inventory_sync($dataset_key)) {
     return true;
   }
 
-  if (ptcgdm_launch_inventory_sync_async_request()) {
+  if (ptcgdm_launch_inventory_sync_async_request($dataset_key)) {
     return true;
   }
 
@@ -6250,27 +6355,32 @@ function ptcgdm_run_inventory_sync_now($args = []) {
   $args = is_array($args) ? $args : [];
   $run_id = isset($args['run_id']) ? (string) $args['run_id'] : '';
   $run_id = ptcgdm_determine_inventory_sync_run_id($run_id);
+  $dataset_key = ptcgdm_resolve_inventory_dataset_key($args);
+  ptcgdm_set_active_inventory_dataset($dataset_key);
 
   ptcgdm_set_inventory_sync_status('running', __('Inventory sync is running…', 'ptcgdm'), ptcgdm_build_inventory_sync_status_extra($run_id, [
     'result' => '',
-  ]));
+    'dataset' => $dataset_key,
+  ]), $dataset_key);
 
   ptcgdm_prepare_inventory_sync_environment();
 
   $dir = trailingslashit(ptcgdm_get_inventory_dir());
-  $path = $dir . PTCGDM_INVENTORY_FILENAME;
+  $path = ptcgdm_get_inventory_path_for_dataset($dataset_key);
 
   if (!file_exists($path)) {
     ptcgdm_set_inventory_sync_status('error', __('No saved inventory snapshot was found. Please save your inventory first.', 'ptcgdm'), ptcgdm_build_inventory_sync_status_extra($run_id, [
       'result' => 'error',
-    ]));
+      'dataset' => $dataset_key,
+    ]), $dataset_key);
     return new WP_Error('ptcgdm_sync_missing', __('No saved inventory snapshot was found. Please save your inventory first.', 'ptcgdm'));
   }
 
   if (!is_readable($path)) {
     ptcgdm_set_inventory_sync_status('error', __('Inventory snapshot is not readable.', 'ptcgdm'), ptcgdm_build_inventory_sync_status_extra($run_id, [
       'result' => 'error',
-    ]));
+      'dataset' => $dataset_key,
+    ]), $dataset_key);
     return new WP_Error('ptcgdm_sync_unreadable', __('Inventory snapshot is not readable.', 'ptcgdm'));
   }
 
@@ -6278,14 +6388,15 @@ function ptcgdm_run_inventory_sync_now($args = []) {
   if ($raw === false) {
     ptcgdm_set_inventory_sync_status('error', __('Unable to read the inventory snapshot.', 'ptcgdm'), ptcgdm_build_inventory_sync_status_extra($run_id, [
       'result' => 'error',
-    ]));
+      'dataset' => $dataset_key,
+    ]), $dataset_key);
     return new WP_Error('ptcgdm_sync_read_error', __('Unable to read the inventory snapshot.', 'ptcgdm'));
   }
 
   $raw = trim((string) $raw);
   $sync_summary = ['processed' => 0, 'total' => 0];
   if ($raw === '') {
-    $sync_summary = ptcgdm_sync_inventory_products([], ['run_id' => $run_id]);
+    $sync_summary = ptcgdm_sync_inventory_products([], ['run_id' => $run_id, 'dataset' => $dataset_key]);
     $processed = isset($sync_summary['processed']) ? (int) $sync_summary['processed'] : 0;
     $total = isset($sync_summary['total']) ? (int) $sync_summary['total'] : 0;
     ptcgdm_set_inventory_sync_status('success', __('Inventory sync completed successfully.', 'ptcgdm'), ptcgdm_build_inventory_sync_status_extra($run_id, [
@@ -6294,7 +6405,8 @@ function ptcgdm_run_inventory_sync_now($args = []) {
       'total_count' => $total,
       'card_index' => $processed,
       'current_card_label' => '',
-    ]));
+      'dataset' => $dataset_key,
+    ]), $dataset_key);
     return true;
   }
 
@@ -6302,7 +6414,8 @@ function ptcgdm_run_inventory_sync_now($args = []) {
   if (!is_array($data)) {
     ptcgdm_set_inventory_sync_status('error', __('Inventory snapshot contains invalid data.', 'ptcgdm'), ptcgdm_build_inventory_sync_status_extra($run_id, [
       'result' => 'error',
-    ]));
+      'dataset' => $dataset_key,
+    ]), $dataset_key);
     return new WP_Error('ptcgdm_sync_invalid', __('Inventory snapshot contains invalid data.', 'ptcgdm'));
   }
 
@@ -6312,7 +6425,7 @@ function ptcgdm_run_inventory_sync_now($args = []) {
   }
 
   try {
-    $sync_summary = ptcgdm_sync_inventory_products($entries, ['run_id' => $run_id]);
+    $sync_summary = ptcgdm_sync_inventory_products($entries, ['run_id' => $run_id, 'dataset' => $dataset_key]);
   } catch (Throwable $sync_error) {
     if (defined('WP_DEBUG') && WP_DEBUG) {
       error_log('PTCGDM inventory sync failed: ' . $sync_error->getMessage());
@@ -6323,7 +6436,7 @@ function ptcgdm_run_inventory_sync_now($args = []) {
       $message = __('Inventory sync encountered an unexpected error.', 'ptcgdm');
     }
 
-    $snapshot = ptcgdm_get_inventory_sync_status();
+    $snapshot = ptcgdm_get_inventory_sync_status($dataset_key);
     $processed_snapshot = isset($snapshot['processed_count']) ? (int) $snapshot['processed_count'] : 0;
     $total_snapshot = isset($snapshot['total_count']) ? (int) $snapshot['total_count'] : 0;
     $card_index = isset($snapshot['card_index']) ? (int) $snapshot['card_index'] : $processed_snapshot;
@@ -6333,7 +6446,8 @@ function ptcgdm_run_inventory_sync_now($args = []) {
       'total_count' => $total_snapshot,
       'card_index' => $card_index,
       'current_card_label' => '',
-    ]));
+      'dataset' => $dataset_key,
+    ]), $dataset_key);
 
     return new WP_Error('ptcgdm_sync_exception', $message);
   }
@@ -6346,13 +6460,15 @@ function ptcgdm_run_inventory_sync_now($args = []) {
     'total_count' => $total,
     'card_index' => $processed,
     'current_card_label' => '',
-  ]));
+    'dataset' => $dataset_key,
+  ]), $dataset_key);
 
   return true;
 }
 
 function ptcgdm_run_inventory_sync_event() {
-  ptcgdm_run_inventory_sync_now();
+  $dataset_key = ptcgdm_get_active_inventory_dataset();
+  ptcgdm_run_inventory_sync_now(['dataset' => $dataset_key]);
 }
 
 add_action('ptcgdm_run_inventory_sync', 'ptcgdm_run_inventory_sync_event');
@@ -6984,6 +7100,7 @@ function ptcgdm_sync_inventory_products(array $entries, array $context = []) {
   $context = is_array($context) ? $context : [];
   $run_id = isset($context['run_id']) ? (string) $context['run_id'] : '';
   $progress_step = isset($context['progress_step']) ? (int) $context['progress_step'] : 5;
+  $dataset_key = ptcgdm_resolve_inventory_dataset_key($context);
   if (function_exists('apply_filters')) {
     $progress_step = (int) apply_filters('ptcgdm_inventory_sync_progress_step', $progress_step, $context);
   }
@@ -7001,7 +7118,8 @@ function ptcgdm_sync_inventory_products(array $entries, array $context = []) {
     'total_count' => $total_count,
     'card_index' => 0,
     'current_card_label' => '',
-  ]);
+    'dataset' => $dataset_key,
+  ], $dataset_key);
 
   $previous_sync_state = ptcgdm_is_inventory_syncing();
   ptcgdm_set_inventory_syncing(true);
@@ -7108,7 +7226,8 @@ function ptcgdm_sync_inventory_products(array $entries, array $context = []) {
           'total_count' => $total_count,
           'card_index' => $processed_count,
           'current_card_label' => $progress_label,
-        ]);
+          'dataset' => $dataset_key,
+        ], $dataset_key);
       }
 
       $image_url = '';
@@ -7370,14 +7489,14 @@ function ptcgdm_zero_unlisted_inventory_products(array $active_skus) {
   }
 }
 
-function ptcgdm_remove_inventory_card_entry($card_id) {
+function ptcgdm_remove_inventory_card_entry($card_id, $dataset_key = '') {
   $card_id = trim((string) $card_id);
   if ($card_id === '') {
     return new WP_Error('ptcgdm_invalid_card', __('Invalid card ID.', 'ptcgdm'));
   }
 
   $dir  = trailingslashit(ptcgdm_get_inventory_dir());
-  $path = $dir . PTCGDM_INVENTORY_FILENAME;
+  $path = ptcgdm_get_inventory_path_for_dataset($dataset_key);
 
   if (!file_exists($path)) {
     return ['removed' => false, 'path' => $path];
@@ -7519,14 +7638,14 @@ function ptcgdm_delete_inventory_product_by_card($card_id) {
   return ['deleted' => true, 'product_id' => $product_id];
 }
 
-function ptcgdm_update_inventory_card_quantity($card_id, $quantity, ?array $variant_quantities = null) {
+function ptcgdm_update_inventory_card_quantity($card_id, $quantity, ?array $variant_quantities = null, $dataset_key = '') {
   $card_id = trim((string) $card_id);
   if ($card_id === '') {
     return false;
   }
 
   $dir = trailingslashit(ptcgdm_get_inventory_dir());
-  $path = $dir . PTCGDM_INVENTORY_FILENAME;
+  $path = ptcgdm_get_inventory_path_for_dataset($dataset_key);
   if (!file_exists($path) || !is_readable($path)) {
     return false;
   }
