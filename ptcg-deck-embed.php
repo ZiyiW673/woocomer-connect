@@ -5764,28 +5764,35 @@ function ptcgdm_filter_managed_product_image_attributes($attr, $attachment, $siz
     return $attr;
   }
 
-  $target = defined('PTCGDM_PRODUCT_IMAGE_SIZE') ? (int) PTCGDM_PRODUCT_IMAGE_SIZE : 512;
-  if ($target <= 0) {
+  $configured_target = defined('PTCGDM_PRODUCT_IMAGE_SIZE') ? (int) PTCGDM_PRODUCT_IMAGE_SIZE : 512;
+
+  $current_width  = isset($attr['width']) ? (int) $attr['width'] : 0;
+  $current_height = isset($attr['height']) ? (int) $attr['height'] : 0;
+
+  $target_width  = $current_width > 0 ? $current_width : $configured_target;
+  $target_height = $current_height > 0 ? $current_height : $configured_target;
+
+  if ($target_width <= 0 || $target_height <= 0) {
     return $attr;
   }
 
-  $attr['width']  = $target;
-  $attr['height'] = $target;
+  $attr['width']  = $target_width;
+  $attr['height'] = $target_height;
 
   $existing_style = isset($attr['style']) ? trim((string) $attr['style']) : '';
   $style_parts    = [];
   if ($existing_style !== '') {
     $style_parts[] = rtrim($existing_style, ';');
   }
-  $style_parts[] = 'width:' . $target . 'px';
-  $style_parts[] = 'height:' . $target . 'px';
+  $style_parts[] = 'width:' . $target_width . 'px';
+  $style_parts[] = 'height:' . $target_height . 'px';
   $attr['style']  = implode(';', $style_parts);
   if ($attr['style'] !== '' && substr($attr['style'], -1) !== ';') {
     $attr['style'] .= ';';
   }
 
   if (empty($attr['sizes'])) {
-    $attr['sizes'] = $target . 'px';
+    $attr['sizes'] = $target_width . 'px';
   }
 
   return $attr;
