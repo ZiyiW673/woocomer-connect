@@ -661,7 +661,12 @@ function ptcgdm_render_builder(array $config = []){
   }
 
   $deck_empty_colspan = 5 + $inventory_variant_count * 2 + 1;
-  $inventory_saved_colspan = $deck_empty_colspan + 1;
+  $saved_variant_columns = 0;
+  foreach ($inventory_variant_columns as $variant_column) {
+    $key = (string) ($variant_column['key'] ?? '');
+    $saved_variant_columns += ($key === 'stamped') ? 1 : 2;
+  }
+  $inventory_saved_colspan = 7 + $saved_variant_columns;
 ?>
   <div class="wrap">
     <h1><?php echo esc_html($page_title); ?></h1>
@@ -872,8 +877,12 @@ function ptcgdm_render_builder(array $config = []){
               <th>No.</th>
               <th>Supertype</th>
               <?php foreach ($inventory_variant_columns as $variant_column) : ?>
-                <th><?php echo esc_html($variant_column['qty_header']); ?></th>
-                <th><?php echo esc_html($variant_column['price_header']); ?></th>
+                <?php if (($variant_column['key'] ?? '') === 'stamped') : ?>
+                  <th>Special pattern</th>
+                <?php else : ?>
+                  <th><?php echo esc_html($variant_column['qty_header']); ?></th>
+                  <th><?php echo esc_html($variant_column['price_header']); ?></th>
+                <?php endif; ?>
               <?php endforeach; ?>
               <th>Actions</th>
             </tr>
@@ -2582,6 +2591,21 @@ function ptcgdm_render_builder(array $config = []){
         renderDeckTable();
         updateJSON();
       }
+
+      function getSpecialPatternOptionsForDisplay(variant){
+        const patterns = normalizeSpecialPatternArray(variant?.patterns);
+        const options = [];
+        patterns.forEach((slot, index)=>{
+          if(!isSpecialPatternSlotActive(slot)) return;
+          const qtyRaw = slot && slot.qty !== undefined ? slot.qty : 0;
+          const qty = Number.isFinite(qtyRaw) ? qtyRaw : parseInt(qtyRaw, 10) || 0;
+          const priceValue = Number.isFinite(slot?.price) ? slot.price : parsePriceValue(slot?.price);
+          const name = (slot && typeof slot.name === 'string' && slot.name.trim()) ? slot.name.trim() : `Pattern ${index + 1}`;
+          options.push({ name, qty, price: priceValue });
+        });
+        return options;
+      }
+
       function renderInventoryDataTable(){
         if(!IS_INVENTORY || !els.inventoryBody) return;
         const defaultEmptyMessage = 'No inventory saved yet.';
@@ -2705,12 +2729,39 @@ function ptcgdm_render_builder(array $config = []){
           let entryQty = 0;
           let hasData = false;
           const variantCells = [];
-          INVENTORY_VARIANTS.forEach(({ key })=>{
+          INVENTORY_VARIANTS.forEach(({ key, label })=>{
             const variant = variants[key];
-            const qtyRaw = variant && variant.qty !== undefined ? variant.qty : 0;
-            const qtyValue = Number.isFinite(qtyRaw) ? qtyRaw : parseInt(qtyRaw, 10) || 0;
-            const priceRaw = variant && variant.price !== undefined ? variant.price : null;
-            const priceValue = Number.isFinite(priceRaw) ? priceRaw : parsePriceValue(priceRaw);
+            let qtyRaw = variant && variant.qty !== undefined ? variant.qty : 0;
+            let qtyValue = Number.isFinite(qtyRaw) ? qtyRaw : parseInt(qtyRaw, 10) || 0;
+            let priceRaw = variant && variant.price !== undefined ? variant.price : null;
+            let priceValue = Number.isFinite(priceRaw) ? priceRaw : parsePriceValue(priceRaw);
+            if(key === SPECIAL_PATTERN_KEY){
+              const variantData = variant && typeof variant === 'object' ? variant : {};
+              recomputeSpecialPatternVariant(variantData);
+              qtyRaw = variantData && variantData.qty !== undefined ? variantData.qty : qtyRaw;
+              qtyValue = Number.isFinite(qtyRaw) ? qtyRaw : parseInt(qtyRaw, 10) || 0;
+              priceRaw = variantData && variantData.price !== undefined ? variantData.price : priceRaw;
+              priceValue = Number.isFinite(priceRaw) ? priceRaw : parsePriceValue(priceRaw);
+              const options = getSpecialPatternOptionsForDisplay(variantData);
+              if(options.length){
+                hasData = true;
+              }
+              if(qtyValue > 0){
+                entryQty += qtyValue;
+              }
+              const optionHtml = options.map(option=>{
+                const priceText = formatPriceDisplay(option.price);
+                return `<option>${esc(option.name)} — Qty: ${option.qty}, Price: ${priceText}</option>`;
+              }).join('');
+              const cellContent = options.length
+                ? `<select class="special-pattern-select">${optionHtml}</select>`
+                : 'N/A';
+              variantCells.push(`<td class="special-pattern-cell">${cellContent}</td>`);
+              if(qtyValue !== 0 || Number.isFinite(priceValue)){
+                hasData = true;
+              }
+              return;
+            }
             if(qtyValue !== 0 || Number.isFinite(priceValue)){
               hasData = true;
             }
