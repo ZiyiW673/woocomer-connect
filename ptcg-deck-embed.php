@@ -702,6 +702,7 @@ function ptcgdm_render_builder(array $config = []){
       .special-pattern-cell{min-width:260px}
       .special-pattern-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));grid-template-rows:repeat(2,minmax(0,1fr));gap:8px}
       .special-pattern-block{border:1px solid var(--line);border-radius:10px;padding:4px;display:grid;grid-template-columns:1fr 1fr 2fr;gap:4px;align-items:center}
+      .special-pattern-placeholder{border:1px dashed var(--line);border-radius:10px;padding:4px;display:flex;align-items:center;justify-content:center;font-size:12px;color:var(--muted);background:transparent;cursor:pointer;min-height:56px;width:100%}
       .special-pattern-input{width:100%;padding:3px 6px;font-size:12px;border-radius:8px;border:1px solid #262c39;background:#12151b;color:var(--ink)}
       .inventory-select-col,.inventory-select-cell{text-align:center;width:40px}
       .inventory-select-cell input[type="checkbox"]{width:16px;height:16px;margin:0}
@@ -1239,7 +1240,7 @@ function ptcgdm_render_builder(array $config = []){
           variant.patterns = [];
         }
         while(variant.patterns.length < SPECIAL_PATTERN_SLOT_COUNT){
-          variant.patterns.push({ qty: 0, price: null, name: '' });
+          variant.patterns.push({ qty: 0, price: null, name: '', active: false });
         }
         if(variant.patterns.length > SPECIAL_PATTERN_SLOT_COUNT){
           variant.patterns = variant.patterns.slice(0, SPECIAL_PATTERN_SLOT_COUNT);
@@ -1251,12 +1252,24 @@ function ptcgdm_render_builder(array $config = []){
         const qty = clampBufferQty(slot?.qty ?? 0);
         const priceValue = parsePriceValue(slot?.price);
         const name = typeof slot?.name === 'string' ? slot.name.trim() : '';
+        const active = slot?.active === true;
         const out = { qty };
         out.price = Number.isFinite(priceValue) ? priceValue : null;
         if(name){
           out.name = name;
         }
+        if(active || out.qty !== 0 || out.price !== null || name){
+          out.active = true;
+        }
         return out;
+      }
+
+      function isSpecialPatternSlotActive(slot){
+        if(!slot || typeof slot !== 'object') return false;
+        const qty = Number.isFinite(slot.qty) ? slot.qty : parseInt(slot.qty, 10) || 0;
+        const price = parsePriceValue(slot.price);
+        const name = typeof slot.name === 'string' ? slot.name.trim() : '';
+        return slot.active === true || qty !== 0 || Number.isFinite(price) || !!name;
       }
 
       function normalizeSpecialPatternArray(patterns){
@@ -3498,6 +3511,10 @@ function ptcgdm_render_builder(array $config = []){
               if(key === SPECIAL_PATTERN_KEY){
                 const patterns = ensureSpecialPatternSlots(variantData);
                 const blocks = patterns.map((pattern, slotIndex)=>{
+                  const isActive = isSpecialPatternSlotActive(pattern);
+                  if(!isActive){
+                    return `<button type="button" class="special-pattern-placeholder" data-variant="${key}" data-slot="${slotIndex}">Add pattern</button>`;
+                  }
                   const qtyRaw = pattern && pattern.qty !== undefined ? pattern.qty : 0;
                   const qtyValue = Number.isFinite(qtyRaw) ? qtyRaw : parseInt(qtyRaw, 10) || 0;
                   const priceValue = pattern ? formatPriceInputValue(pattern.price) : '';
@@ -3596,6 +3613,7 @@ function ptcgdm_render_builder(array $config = []){
                 const patterns = ensureSpecialPatternSlots(variant);
                 const slot = patterns[slotIndex];
                 if(!slot) return;
+                slot.active = true;
                 if(field === 'qty'){
                   let next = parseInt(ev.target.value, 10);
                   if(Number.isNaN(next)) next = 0;
@@ -3613,6 +3631,28 @@ function ptcgdm_render_builder(array $config = []){
                 recomputeSpecialPatternVariant(variant);
                 cleanInventoryVariant(entry, variantKey);
                 sumInventoryVariantQuantities(entry);
+                renderDeckTable();
+                updateJSON();
+              });
+            });
+            tr.querySelectorAll('.special-pattern-placeholder').forEach(button=>{
+              button.addEventListener('click',(ev)=>{
+                const variantKey = ev.target?.dataset?.variant;
+                const slotIndexRaw = ev.target?.dataset?.slot;
+                if(variantKey !== SPECIAL_PATTERN_KEY) return;
+                const slotIndex = parseInt(slotIndexRaw, 10);
+                if(Number.isNaN(slotIndex)) return;
+                const rowIndex = deckMap.get(id);
+                if(rowIndex === undefined) return;
+                const entry = deck[rowIndex];
+                const variant = getInventoryVariant(entry, variantKey);
+                const patterns = ensureSpecialPatternSlots(variant);
+                const slot = patterns[slotIndex];
+                if(!slot) return;
+                slot.active = true;
+                if(!Number.isFinite(slot.qty)) slot.qty = 0;
+                if(!Number.isFinite(slot.price)) slot.price = null;
+                if(typeof slot.name !== 'string') slot.name = '';
                 renderDeckTable();
                 updateJSON();
               });
