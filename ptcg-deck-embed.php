@@ -7982,6 +7982,10 @@ function ptcgdm_sync_inventory_products(array $entries, array $context = []) {
         } else {
           unset($variants[$variant_key]['price']);
         }
+        if ($qty > 0 && $price_value === null) {
+          $variants[$variant_key]['qty'] = 0;
+          continue;
+        }
         if ($qty > 0) {
           $active_variants[$variant_key] = $variants[$variant_key];
           $total_qty += $qty;
