@@ -7067,6 +7067,124 @@ function ptcgdm_normalize_inventory_quantity($value, $allow_negative = false) {
   return $qty;
 }
 
+function ptcgdm_normalize_special_pattern_slot($slot, $allow_negative = false) {
+  $qty = ptcgdm_normalize_inventory_quantity($slot['qty'] ?? 0, $allow_negative);
+  $price = array_key_exists('price', (array) $slot) ? ptcgdm_normalize_inventory_price($slot['price']) : null;
+  $name = isset($slot['name']) ? trim((string) $slot['name']) : '';
+  $active = !empty($slot['active']);
+
+  if (!$allow_negative && $qty < 0) {
+    $qty = 0;
+  }
+
+  $normalized = ['qty' => $qty];
+  if ($price !== null) {
+    $normalized['price'] = $price;
+  }
+  if ($name !== '') {
+    $normalized['name'] = $name;
+  }
+  if ($active || $qty !== 0 || $price !== null || $name !== '') {
+    $normalized['active'] = true;
+  }
+
+  return $normalized;
+}
+
+function ptcgdm_normalize_special_pattern_array($patterns, $allow_negative = false) {
+  $normalized = [];
+  if (is_array($patterns)) {
+    foreach ($patterns as $pattern) {
+      $normalized[] = ptcgdm_normalize_special_pattern_slot($pattern, $allow_negative);
+    }
+  }
+  return $normalized;
+}
+
+function ptcgdm_special_pattern_total_quantity(array $patterns) {
+  $total = 0;
+  foreach ($patterns as $pattern) {
+    $qty = ptcgdm_normalize_inventory_quantity($pattern['qty'] ?? 0);
+    if ($qty > 0) {
+      $total += $qty;
+    }
+  }
+  return $total;
+}
+
+function ptcgdm_special_pattern_has_data(array $patterns) {
+  foreach ($patterns as $pattern) {
+    $qty = ptcgdm_normalize_inventory_quantity($pattern['qty'] ?? 0);
+    $price = array_key_exists('price', $pattern) ? ptcgdm_normalize_inventory_price($pattern['price']) : null;
+    $name = isset($pattern['name']) ? trim((string) $pattern['name']) : '';
+    if (!empty($pattern['active']) || $qty !== 0 || $price !== null || $name !== '') {
+      return true;
+    }
+  }
+  return false;
+}
+
+function ptcgdm_special_pattern_default_label($index) {
+  $index = (int) $index;
+  if ($index < 0) {
+    $index = 0;
+  }
+  return sprintf(__('Pattern %d', 'ptcgdm'), $index + 1);
+}
+
+function ptcgdm_expand_special_pattern_variants_for_sync(array $variants) {
+  if (!isset($variants['stamped']) || !is_array($variants['stamped'])) {
+    return [];
+  }
+
+  $pattern_data = $variants['stamped'];
+  $patterns = ptcgdm_normalize_special_pattern_array($pattern_data['patterns'] ?? []);
+  if (!$patterns) {
+    return [];
+  }
+
+  $expanded = [];
+  $used_keys = [];
+
+  foreach ($patterns as $index => $slot) {
+    $qty = ptcgdm_normalize_inventory_quantity($slot['qty'] ?? 0);
+    $price = array_key_exists('price', $slot) ? ptcgdm_normalize_inventory_price($slot['price']) : null;
+    $name = isset($slot['name']) ? trim((string) $slot['name']) : '';
+    $active = !empty($slot['active']) || $qty !== 0 || $price !== null || $name !== '';
+
+    if (!$active) {
+      continue;
+    }
+
+    if ($qty < 0) {
+      $qty = 0;
+    }
+
+    $label = $name !== '' ? $name : ptcgdm_special_pattern_default_label($index);
+    $base_key = sanitize_title($label !== '' ? $label : ptcgdm_special_pattern_default_label($index));
+    if ($base_key === '') {
+      $base_key = 'pattern-' . ($index + 1);
+    }
+
+    $variant_key = $base_key;
+    $suffix = 2;
+    while (isset($used_keys[$variant_key])) {
+      $variant_key = $base_key . '-' . $suffix;
+      $suffix++;
+    }
+
+    $used_keys[$variant_key] = true;
+
+    $variant = ['qty' => $qty, 'label' => $label, 'option_label' => $label];
+    if ($price !== null) {
+      $variant['price'] = $price;
+    }
+    $expanded[$variant_key] = $variant;
+  }
+
+  return $expanded;
+}
+
 function ptcgdm_extract_inventory_variants_from_entry(array $entry) {
   $variants = [];
   $source = [];
@@ -7088,10 +7206,33 @@ function ptcgdm_extract_inventory_variants_from_entry(array $entry) {
     if (array_key_exists('price', $data)) {
       $price = ptcgdm_normalize_inventory_price($data['price']);
     }
-    if ($qty > 0 || $price !== null) {
+    $patterns = [];
+    $has_pattern_data = false;
+    if ($key === 'stamped' && isset($data['patterns'])) {
+      $patterns = ptcgdm_normalize_special_pattern_array($data['patterns']);
+      $has_pattern_data = ptcgdm_special_pattern_has_data($patterns);
+      if ($qty === 0) {
+        $qty = ptcgdm_special_pattern_total_quantity($patterns);
+      }
+      if ($price === null) {
+        foreach ($patterns as $pattern_slot) {
+          if (array_key_exists('price', $pattern_slot)) {
+            $candidate_price = ptcgdm_normalize_inventory_price($pattern_slot['price']);
+            if ($candidate_price !== null) {
+              $price = $candidate_price;
+              break;
+            }
+          }
+        }
+      }
+    }
+    if ($qty > 0 || $price !== null || $has_pattern_data) {
       $variants[$key] = ['qty' => $qty];
       if ($price !== null) {
         $variants[$key]['price'] = $price;
+      }
+      if ($has_pattern_data) {
+        $variants[$key]['patterns'] = $patterns;
       }
     }
   }
@@ -7201,18 +7342,38 @@ function ptcgdm_sync_inventory_product_variations($product, array $active_varian
     $normalized_variants[$normalized_key] = $data;
   }
 
-  $options = [];
+  $option_value_map = [];
+  foreach ($normalized_variants as $variant_key => $variant_data) {
+    $option_label = '';
+    if (isset($variant_data['option_label'])) {
+      $option_label = trim((string) $variant_data['option_label']);
+    } elseif (isset($variant_data['label'])) {
+      $option_label = trim((string) $variant_data['label']);
+    } elseif (isset($variant_labels[$variant_key])) {
+      $option_label = $variant_labels[$variant_key];
+    }
+    if ($option_label === '') {
+      $option_label = $variant_key;
+    }
+    $option_value_map[$variant_key] = $option_label;
+  }
+
+  $option_keys = [];
   foreach ($variant_labels as $variant_key => $_) {
     if (array_key_exists($variant_key, $normalized_variants)) {
-      $options[] = $variant_key;
+      $option_keys[] = $variant_key;
     }
   }
 
   foreach ($normalized_variants as $variant_key => $_) {
-    if (!in_array($variant_key, $options, true)) {
-      $options[] = $variant_key;
+    if (!in_array($variant_key, $option_keys, true)) {
+      $option_keys[] = $variant_key;
     }
   }
+
+  $options = array_values(array_map(function ($key) use ($option_value_map) {
+    return $option_value_map[$key] ?? $key;
+  }, $option_keys));
 
   $active_variants = $normalized_variants;
 
@@ -7263,7 +7424,16 @@ function ptcgdm_sync_inventory_product_variations($product, array $active_varian
         if ($variant_key === '' || $variant_key === null) {
           $attr_value = $child->get_attribute($attribute_slug);
           if ($attr_value !== '') {
-            $variant_key = ptcgdm_inventory_variant_key_from_label($attr_value);
+            $matched_key = ptcgdm_inventory_variant_key_from_label($attr_value);
+            if ($matched_key === '' && !empty($option_value_map)) {
+              foreach ($option_value_map as $candidate_key => $option_value) {
+                if (strcasecmp($attr_value, $option_value) === 0) {
+                  $matched_key = $candidate_key;
+                  break;
+                }
+              }
+            }
+            $variant_key = $matched_key;
           }
         }
         if ($variant_key !== '') {
@@ -7276,7 +7446,7 @@ function ptcgdm_sync_inventory_product_variations($product, array $active_varian
   $used_ids = [];
   $min_price = null;
 
-  foreach ($options as $variant_key) {
+  foreach ($option_keys as $variant_key) {
     if (!isset($active_variants[$variant_key])) {
       continue;
     }
@@ -7299,7 +7469,8 @@ function ptcgdm_sync_inventory_product_variations($product, array $active_varian
       $variation->set_status('publish');
     }
 
-    $attributes = [$variation_attribute_key => $variant_key];
+    $option_value = $option_value_map[$variant_key] ?? $variant_key;
+    $attributes = [$variation_attribute_key => $option_value];
     if (method_exists($variation, 'set_attributes')) {
       $variation->set_attributes($attributes);
     }
@@ -7570,9 +7741,27 @@ function ptcgdm_sync_inventory_products(array $entries, array $context = []) {
       $card_id = $prepared_entry['card_id'];
       $variants = $prepared_entry['variants'];
 
+      $pattern_variants = ptcgdm_expand_special_pattern_variants_for_sync($variants);
+      $has_pattern_variants = !empty($pattern_variants);
+      if ($has_pattern_variants) {
+        if (isset($variants['stamped']) && is_array($variants['stamped'])) {
+          $patterns = isset($variants['stamped']['patterns']) ? ptcgdm_normalize_special_pattern_array($variants['stamped']['patterns']) : [];
+          $variants['stamped']['qty'] = ptcgdm_special_pattern_total_quantity($patterns);
+          if (!empty($patterns)) {
+            $variants['stamped']['patterns'] = $patterns;
+          }
+        }
+        foreach ($pattern_variants as $pattern_key => $pattern_variant) {
+          $variants[$pattern_key] = $pattern_variant;
+        }
+      }
+
       $active_variants = [];
       $total_qty = 0;
       foreach ($variants as $variant_key => $variant_data) {
+        if ($variant_key === 'stamped' && $has_pattern_variants) {
+          continue;
+        }
         $qty = ptcgdm_normalize_inventory_quantity($variant_data['qty'] ?? 0);
         if ($qty < 0) {
           $qty = 0;
@@ -7593,6 +7782,9 @@ function ptcgdm_sync_inventory_products(array $entries, array $context = []) {
       $variant_order = array_keys(ptcgdm_get_inventory_variant_labels());
       $primary_variant_key = '';
       foreach ($variant_order as $order_key) {
+        if ($order_key === 'stamped' && $has_pattern_variants) {
+          continue;
+        }
         if (isset($variants[$order_key]) && $variants[$order_key]['qty'] > 0) {
           $primary_variant_key = $order_key;
           break;
@@ -7605,12 +7797,17 @@ function ptcgdm_sync_inventory_products(array $entries, array $context = []) {
             break;
           }
         }
-        if ($primary_variant_key === '') {
-          $variant_keys = array_keys($variants);
-          if (isset($variant_keys[0])) {
-            $primary_variant_key = $variant_keys[0];
+      if ($primary_variant_key === '') {
+        $variant_keys = array_filter(array_keys($variants), function ($key) use ($has_pattern_variants) {
+          if ($has_pattern_variants && $key === 'stamped') {
+            return false;
           }
+          return true;
+        });
+        if (isset($variant_keys[0])) {
+          $primary_variant_key = $variant_keys[0];
         }
+      }
       }
       if ($primary_variant_key === '') {
         continue;
