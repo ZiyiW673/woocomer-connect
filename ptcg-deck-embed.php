@@ -2203,19 +2203,61 @@ function ptcgdm_render_builder(array $config = []){
         updateBulkAddState();
       }
 
+      function parseSpecialPatternToken(token){
+        if(!token || typeof token !== 'string') return null;
+        const raw = token.trim();
+        if(!raw) return null;
+        if(!/[|:]/.test(raw)) return null;
+        const parts = raw.split(/[|:]/).map(part => part.trim());
+        if(parts.length < 2){
+          return { error: 'Special pattern entries must include a name and quantity.' };
+        }
+        const [nameRaw, qtyRaw, priceRaw] = parts;
+        const name = nameRaw || '';
+        if(!name){
+          return { error: 'Special pattern name is required.' };
+        }
+        if(qtyRaw === undefined || qtyRaw === null || String(qtyRaw).trim() === ''){
+          return { error: `Special pattern “${name}” is missing a quantity.` };
+        }
+        if(!/^[-+]?\d+(?:\.\d*)?$/.test(String(qtyRaw).trim())){
+          return { error: `Invalid quantity for special pattern “${name}”.` };
+        }
+        const qtyValue = clampBufferQty(parseInt(qtyRaw, 10));
+        const priceValue = parsePriceValue(priceRaw);
+        const slot = { qty: qtyValue, name, active: true };
+        if(Number.isFinite(priceValue)){
+          slot.price = priceValue;
+        }
+        return { slot };
+      }
+
       function parseInventoryVariantQuantities(quantityTokens){
         const variantQuantities = {};
         let totalQty = 0;
         let hasQuantities = false;
         const maxVariants = INVENTORY_VARIANTS.length;
-        const extraTokens = Array.isArray(quantityTokens) ? quantityTokens.slice(maxVariants) : [];
-        if(extraTokens.some(token => String(token || '').trim() !== '')){
+        const quantityOnlyTokens = [];
+        const patternTokens = [];
+        if(Array.isArray(quantityTokens)){
+          quantityTokens.forEach(token=>{
+            const normalised = String(token || '').trim();
+            if(!normalised) return;
+            if(/[|:]/.test(normalised)){
+              patternTokens.push(normalised);
+            }else{
+              quantityOnlyTokens.push(normalised);
+            }
+          });
+        }
+        if(quantityOnlyTokens.length > maxVariants){
           return { error: `Too many quantity values. Expected ${maxVariants}.` };
         }
+
         let quantityError = null;
         INVENTORY_VARIANTS.forEach(({ key, label }, idx)=>{
           if(quantityError) return;
-          const token = Array.isArray(quantityTokens) ? quantityTokens[idx] : undefined;
+          const token = Array.isArray(quantityOnlyTokens) ? quantityOnlyTokens[idx] : undefined;
           if(token === undefined || token === null) return;
           const normalised = String(token).trim();
           if(normalised === '') return;
@@ -2235,9 +2277,70 @@ function ptcgdm_render_builder(array $config = []){
           }
           totalQty += clampedQty;
         });
+
         if(quantityError){
           return { error: quantityError };
         }
+
+        if(patternTokens.length > SPECIAL_PATTERN_SLOT_COUNT){
+          return { error: `Too many special pattern entries. Maximum is ${SPECIAL_PATTERN_SLOT_COUNT}.` };
+        }
+
+        const patternSlots = [];
+        let patternError = null;
+        patternTokens.forEach(token=>{
+          if(patternError) return;
+          const parsed = parseSpecialPatternToken(token);
+          if(!parsed){
+            patternError = 'Invalid special pattern format.';
+            return;
+          }
+          if(parsed.error){
+            patternError = parsed.error;
+            return;
+          }
+          if(parsed.slot){
+            patternSlots.push(parsed.slot);
+          }
+        });
+
+        if(patternError){
+          return { error: patternError };
+        }
+
+        let patternQtyTotal = 0;
+        let patternPrice = null;
+        const normalizedPatterns = normalizeSpecialPatternArray(patternSlots);
+        normalizedPatterns.forEach(slot=>{
+          if(!slot || typeof slot !== 'object') return;
+          const qty = Number.isFinite(slot.qty) ? slot.qty : parseInt(slot.qty, 10) || 0;
+          const priceValue = parsePriceValue(slot.price);
+          if(Number.isFinite(qty)){
+            patternQtyTotal += qty;
+          }
+          if(patternPrice === null && Number.isFinite(priceValue)){
+            patternPrice = priceValue;
+          }
+        });
+
+        const rawSpecialQty = variantQuantities[SPECIAL_PATTERN_KEY];
+        if(rawSpecialQty !== undefined && Number.isFinite(parseInt(rawSpecialQty, 10))){
+          const numericQty = clampBufferQty(parseInt(rawSpecialQty, 10));
+          if(Number.isFinite(numericQty)){
+            patternQtyTotal += numericQty;
+          }
+        }
+
+        if(hasSpecialPatternData({ patterns: normalizedPatterns }) || patternQtyTotal !== 0 || Number.isFinite(patternPrice)){
+          variantQuantities[SPECIAL_PATTERN_KEY] = {
+            qty: patternQtyTotal,
+            price: Number.isFinite(patternPrice) ? patternPrice : null,
+            patterns: normalizedPatterns,
+          };
+          totalQty += patternQtyTotal;
+          hasQuantities = hasQuantities || patternTokens.length > 0;
+        }
+
         return { variantQuantities, totalQty, hasQuantities };
       }
 
@@ -2495,14 +2598,25 @@ function ptcgdm_render_builder(array $config = []){
         const safeQty = IS_INVENTORY ? clampBufferQty(qty) : Math.max(1, Math.min(60, parseInt(qty, 10) || 1));
         const hasVariantQuantities = IS_INVENTORY && variantQuantities && typeof variantQuantities === 'object';
         const variantDeltas = {};
+        const variantObjectDeltas = {};
         let requestedVariantTotal = 0;
         let variantDeltaCount = 0;
         if(hasVariantQuantities){
           INVENTORY_VARIANTS.forEach(({ key })=>{
             if(!Object.prototype.hasOwnProperty.call(variantQuantities, key)) return;
-            const rawValue = parseInt(variantQuantities[key], 10);
-            if(!Number.isFinite(rawValue) || rawValue === 0) return;
-            const safeValue = clampBufferQty(rawValue);
+            const rawValue = variantQuantities[key];
+            if(key === SPECIAL_PATTERN_KEY && rawValue && typeof rawValue === 'object'){
+              variantObjectDeltas[key] = rawValue;
+              const qtyValue = Number.isFinite(rawValue.qty) ? rawValue.qty : parseInt(rawValue.qty, 10) || 0;
+              if(Number.isFinite(qtyValue)){
+                requestedVariantTotal += qtyValue;
+              }
+              variantDeltaCount++;
+              return;
+            }
+            const parsedRaw = parseInt(rawValue, 10);
+            if(!Number.isFinite(parsedRaw) || parsedRaw === 0) return;
+            const safeValue = clampBufferQty(parsedRaw);
             if(!Number.isFinite(safeValue) || safeValue === 0) return;
             variantDeltas[key] = safeValue;
             requestedVariantTotal += safeValue;
@@ -2518,9 +2632,27 @@ function ptcgdm_render_builder(array $config = []){
             if(useVariantDeltas){
               let totalApplied = 0;
               INVENTORY_VARIANTS.forEach(({ key })=>{
+                const variant = getInventoryVariant(entry, key);
+                if(key === SPECIAL_PATTERN_KEY && Object.prototype.hasOwnProperty.call(variantObjectDeltas, key)){
+                  const incoming = variantObjectDeltas[key];
+                  const baseQty = Number.isFinite(variant.qty) ? variant.qty : parseInt(variant.qty, 10) || 0;
+                  const merged = mergeSpecialPatternArrays(variant.patterns, incoming.patterns, { allowNegative: true });
+                  const incomingPrice = parsePriceValue(incoming.price);
+                  const priceToUse = Number.isFinite(incomingPrice) ? incomingPrice : variant.price;
+                  variant.patterns = merged;
+                  if(Number.isFinite(priceToUse)){
+                    variant.price = priceToUse;
+                  }
+                  recomputeSpecialPatternVariant(variant);
+                  const appliedDelta = (Number.isFinite(variant.qty) ? variant.qty : 0) - baseQty;
+                  if(appliedDelta !== 0){
+                    totalApplied += appliedDelta;
+                  }
+                  cleanInventoryVariant(entry, key);
+                  return;
+                }
                 if(!Object.prototype.hasOwnProperty.call(variantDeltas, key)) return;
                 const deltaValue = variantDeltas[key];
-                const variant = getInventoryVariant(entry, key);
                 const current = Number.isFinite(variant.qty) ? variant.qty : parseInt(variant.qty, 10) || 0;
                 const next = adjustBufferQty(current, deltaValue);
                 const appliedDelta = next - current;
@@ -2561,8 +2693,21 @@ function ptcgdm_render_builder(array $config = []){
           if(useVariantDeltas){
             let totalAssigned = 0;
             INVENTORY_VARIANTS.forEach(({ key })=>{
-              if(!Object.prototype.hasOwnProperty.call(variantDeltas, key)) return;
               const variant = getInventoryVariant(entry, key);
+              if(key === SPECIAL_PATTERN_KEY && Object.prototype.hasOwnProperty.call(variantObjectDeltas, key)){
+                const incoming = variantObjectDeltas[key];
+                const merged = mergeSpecialPatternArrays([], incoming.patterns, { allowNegative: true });
+                const incomingPrice = parsePriceValue(incoming.price);
+                variant.patterns = merged;
+                if(Number.isFinite(incomingPrice)){
+                  variant.price = incomingPrice;
+                }
+                recomputeSpecialPatternVariant(variant);
+                totalAssigned += Number.isFinite(variant.qty) ? variant.qty : 0;
+                cleanInventoryVariant(entry, key);
+                return;
+              }
+              if(!Object.prototype.hasOwnProperty.call(variantDeltas, key)) return;
               const assigned = variantDeltas[key];
               variant.qty = assigned;
               cleanInventoryVariant(entry, key);
