@@ -701,9 +701,8 @@ function ptcgdm_render_builder(array $config = []){
       .inventory-actions{display:flex;gap:8px;align-items:center;flex-wrap:nowrap}
       .special-pattern-cell{min-width:260px}
       .special-pattern-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));grid-template-rows:repeat(2,minmax(0,1fr));gap:8px}
-      .special-pattern-block{background:#0f1218;border:1px solid var(--line);border-radius:10px;padding:6px;display:grid;grid-template-columns:1fr 1fr 2fr;gap:6px;align-items:center}
-      .special-pattern-label{grid-column:1/-1;font-size:11px;color:var(--muted);margin:0}
-      .special-pattern-input{width:100%;padding:6px 8px;font-size:12px;border-radius:8px;border:1px solid #262c39;background:#12151b;color:var(--ink)}
+      .special-pattern-block{border:1px solid var(--line);border-radius:10px;padding:4px;display:grid;grid-template-columns:1fr 1fr 2fr;gap:4px;align-items:center}
+      .special-pattern-input{width:100%;padding:3px 6px;font-size:12px;border-radius:8px;border:1px solid #262c39;background:#12151b;color:var(--ink)}
       .inventory-select-col,.inventory-select-cell{text-align:center;width:40px}
       .inventory-select-cell input[type="checkbox"]{width:16px;height:16px;margin:0}
       .sync-control{display:flex;flex-direction:column;gap:6px;min-width:180px}
@@ -3503,9 +3502,7 @@ function ptcgdm_render_builder(array $config = []){
                   const qtyValue = Number.isFinite(qtyRaw) ? qtyRaw : parseInt(qtyRaw, 10) || 0;
                   const priceValue = pattern ? formatPriceInputValue(pattern.price) : '';
                   const nameValue = pattern && typeof pattern.name === 'string' ? pattern.name : '';
-                  const patternLabel = `Pattern ${slotIndex + 1}`;
                   return `<div class="special-pattern-block">
-                    <p class="special-pattern-label">${esc(patternLabel)}</p>
                     <input class="special-pattern-input special-pattern-qty" data-variant="${key}" data-slot="${slotIndex}" data-field="qty" type="number" min="${INVENTORY_BUFFER_MIN}" max="${INVENTORY_BUFFER_MAX}" value="${qtyValue}" placeholder="Qty">
                     <input class="special-pattern-input special-pattern-price" data-variant="${key}" data-slot="${slotIndex}" data-field="price" type="number" step="0.01" min="0" value="${priceValue}" placeholder="Price">
                     <input class="special-pattern-input special-pattern-name" data-variant="${key}" data-slot="${slotIndex}" data-field="name" type="text" value="${esc(nameValue)}" placeholder="Pattern name">
