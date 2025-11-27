@@ -699,6 +699,11 @@ function ptcgdm_render_builder(array $config = []){
       .btn.danger{background:linear-gradient(180deg,#ff4d4f,#d9363e)}
       .table-scroll{max-height:420px;overflow:auto;border:1px solid var(--line);border-radius:12px;margin:-4px 0 8px;padding:4px}
       .inventory-actions{display:flex;gap:8px;align-items:center;flex-wrap:nowrap}
+      .special-pattern-cell{min-width:260px}
+      .special-pattern-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));grid-template-rows:repeat(2,minmax(0,1fr));gap:8px}
+      .special-pattern-block{background:#0f1218;border:1px solid var(--line);border-radius:10px;padding:6px;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;align-items:center}
+      .special-pattern-label{grid-column:1/-1;font-size:11px;color:var(--muted);margin:0}
+      .special-pattern-input{width:100%;padding:6px 8px;font-size:12px;border-radius:8px;border:1px solid #262c39;background:#12151b;color:var(--ink)}
       .inventory-select-col,.inventory-select-cell{text-align:center;width:40px}
       .inventory-select-cell input[type="checkbox"]{width:16px;height:16px;margin:0}
       .sync-control{display:flex;flex-direction:column;gap:6px;min-width:180px}
@@ -772,8 +777,12 @@ function ptcgdm_render_builder(array $config = []){
               <th>No.</th>
               <th>Supertype</th>
               <?php foreach ($inventory_variant_columns as $variant_column) : ?>
-                <th><?php echo esc_html($variant_column['qty_header']); ?></th>
-                <th><?php echo esc_html($variant_column['price_header']); ?></th>
+                <?php if (($variant_column['key'] ?? '') === 'stamped') : ?>
+                  <th colspan="2">Special pattern</th>
+                <?php else : ?>
+                  <th><?php echo esc_html($variant_column['qty_header']); ?></th>
+                  <th><?php echo esc_html($variant_column['price_header']); ?></th>
+                <?php endif; ?>
               <?php endforeach; ?>
               <th>Actions</th>
             </tr>
@@ -915,6 +924,8 @@ function ptcgdm_render_builder(array $config = []){
       const INVENTORY_BUFFER_CARD_LIMIT = 50;
       const INVENTORY_VARIANTS = <?php echo $inventory_variant_json; ?>;
       const INVENTORY_SAVED_EMPTY_COLSPAN = <?php echo (int) $inventory_saved_colspan; ?>;
+      const SPECIAL_PATTERN_KEY = 'stamped';
+      const SPECIAL_PATTERN_SLOT_COUNT = 4;
       const INVENTORY_NUMERIC_COLLATOR = (typeof Intl !== 'undefined' && typeof Intl.Collator === 'function')
         ? new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' })
         : null;
@@ -1223,6 +1234,78 @@ function ptcgdm_render_builder(array $config = []){
         return Number.isFinite(price) && price >= 0 ? price.toFixed(2) : '—';
       }
 
+      function ensureSpecialPatternSlots(variant){
+        if(!variant || typeof variant !== 'object') return [];
+        if(!Array.isArray(variant.patterns)){
+          variant.patterns = [];
+        }
+        while(variant.patterns.length < SPECIAL_PATTERN_SLOT_COUNT){
+          variant.patterns.push({ qty: 0, price: null, name: '' });
+        }
+        if(variant.patterns.length > SPECIAL_PATTERN_SLOT_COUNT){
+          variant.patterns = variant.patterns.slice(0, SPECIAL_PATTERN_SLOT_COUNT);
+        }
+        return variant.patterns;
+      }
+
+      function normalizeSpecialPatternSlot(slot){
+        const qty = clampBufferQty(slot?.qty ?? 0);
+        const priceValue = parsePriceValue(slot?.price);
+        const name = typeof slot?.name === 'string' ? slot.name.trim() : '';
+        const out = { qty };
+        out.price = Number.isFinite(priceValue) ? priceValue : null;
+        if(name){
+          out.name = name;
+        }
+        return out;
+      }
+
+      function normalizeSpecialPatternArray(patterns){
+        const result = [];
+        const source = Array.isArray(patterns) ? patterns : [];
+        for(let i=0;i<SPECIAL_PATTERN_SLOT_COUNT;i++){
+          const slot = source[i] || {};
+          result.push(normalizeSpecialPatternSlot(slot));
+        }
+        return result;
+      }
+
+      function recomputeSpecialPatternVariant(variant){
+        if(!variant || typeof variant !== 'object') return { qty: 0, price: null, patterns: [] };
+        const slots = ensureSpecialPatternSlots(variant);
+        let totalQty = 0;
+        let firstPrice = null;
+        const normalized = [];
+        slots.forEach(slot=>{
+          const clean = normalizeSpecialPatternSlot(slot);
+          normalized.push(clean);
+          const qty = Number.isFinite(clean.qty) ? clean.qty : parseInt(clean.qty, 10) || 0;
+          const price = parsePriceValue(clean.price);
+          if(Number.isFinite(qty)){
+            totalQty += qty;
+          }
+          if(firstPrice === null && Number.isFinite(price)){
+            firstPrice = price;
+          }
+        });
+        variant.patterns = normalized;
+        variant.qty = Number.isFinite(totalQty) ? totalQty : 0;
+        variant.price = Number.isFinite(firstPrice) ? firstPrice : null;
+        return variant;
+      }
+
+      function hasSpecialPatternData(variant){
+        if(!variant || typeof variant !== 'object') return false;
+        const slots = Array.isArray(variant.patterns) ? variant.patterns : [];
+        return slots.some(slot=>{
+          if(!slot || typeof slot !== 'object') return false;
+          const qty = Number.isFinite(slot.qty) ? slot.qty : parseInt(slot.qty, 10);
+          const price = parsePriceValue(slot.price);
+          const name = typeof slot.name === 'string' ? slot.name.trim() : '';
+          return (Number.isFinite(qty) && qty !== 0) || Number.isFinite(price) || !!name;
+        });
+      }
+
       function ensureInventoryVariants(entry){
         if(!entry) return {};
         if(!entry.variants || typeof entry.variants !== 'object'){
@@ -1237,6 +1320,9 @@ function ptcgdm_render_builder(array $config = []){
         if(!Object.prototype.hasOwnProperty.call(variants, key) || typeof variants[key] !== 'object'){
           variants[key] = { qty: 0, price: null };
         }
+        if(key === SPECIAL_PATTERN_KEY){
+          recomputeSpecialPatternVariant(variants[key]);
+        }
         return variants[key];
       }
 
@@ -1248,12 +1334,17 @@ function ptcgdm_render_builder(array $config = []){
           if(!value || typeof value !== 'object') return;
           const qty = Number.isFinite(value.qty) ? value.qty : parseInt(value.qty, 10);
           const price = parsePriceValue(value.price);
+          const patterns = key === SPECIAL_PATTERN_KEY ? normalizeSpecialPatternArray(value.patterns) : null;
+          const includePatterns = key === SPECIAL_PATTERN_KEY && hasSpecialPatternData({ patterns });
           const includeQty = Number.isFinite(qty);
           const includePrice = Number.isFinite(price);
-          if(!includeQty && !includePrice) return;
+          if(!includeQty && !includePrice && !includePatterns) return;
           out[key] = { qty: includeQty ? qty : 0 };
           if(includePrice){
             out[key].price = price;
+          }
+          if(includePatterns){
+            out[key].patterns = patterns;
           }
         });
         return out;
@@ -1284,10 +1375,16 @@ function ptcgdm_render_builder(array $config = []){
               hasData = true;
             }
           }
+          const patterns = key === SPECIAL_PATTERN_KEY ? normalizeSpecialPatternArray(source?.patterns) : null;
+          const hasPatterns = key === SPECIAL_PATTERN_KEY && hasSpecialPatternData({ patterns });
           entry.variants[key] = {
             qty: 0,
             price: Number.isFinite(priceValue) ? priceValue : null,
           };
+          if(hasPatterns){
+            entry.variants[key].patterns = patterns;
+            hasData = true;
+          }
         });
         Object.keys(variantsSource).forEach((key)=>{
           if(knownKeys.has(key)) return;
@@ -1320,6 +1417,9 @@ function ptcgdm_render_builder(array $config = []){
           knownKeys.add(key);
           const value = variants[key];
           if(!value || typeof value !== 'object') return;
+          if(key === SPECIAL_PATTERN_KEY){
+            recomputeSpecialPatternVariant(value);
+          }
           const qty = Number.isFinite(value.qty) ? value.qty : parseInt(value.qty, 10);
           if(Number.isFinite(qty)){
             total += qty;
@@ -1342,16 +1442,27 @@ function ptcgdm_render_builder(array $config = []){
         if(!entry || !entry.variants || typeof entry.variants !== 'object') return;
         const data = entry.variants[key];
         if(!data || typeof data !== 'object') return;
+        if(key === SPECIAL_PATTERN_KEY){
+          recomputeSpecialPatternVariant(data);
+        }
         const qty = Number.isFinite(data.qty) ? data.qty : parseInt(data.qty, 10);
         const price = parsePriceValue(data.price);
+        const patterns = key === SPECIAL_PATTERN_KEY ? normalizeSpecialPatternArray(data.patterns) : null;
+        const hasPatterns = key === SPECIAL_PATTERN_KEY && hasSpecialPatternData({ patterns });
         if(!Number.isFinite(qty) || qty === 0){
-          if(Number.isFinite(price)){
-            entry.variants[key] = { qty: Number.isFinite(qty) ? qty : 0, price };
+          if(Number.isFinite(price) || hasPatterns){
+            entry.variants[key] = { qty: Number.isFinite(qty) ? qty : 0, price: Number.isFinite(price) ? price : null };
+            if(hasPatterns){
+              entry.variants[key].patterns = patterns;
+            }
           }else{
             delete entry.variants[key];
           }
         }else{
           entry.variants[key] = { qty, price: Number.isFinite(price) ? price : null };
+          if(hasPatterns){
+            entry.variants[key].patterns = patterns;
+          }
         }
       }
 
@@ -3069,6 +3180,7 @@ function ptcgdm_render_builder(array $config = []){
           const source = rawVariants && typeof rawVariants[key] === 'object' ? rawVariants[key] : null;
           let qty = null;
           let price = null;
+          const patterns = key === SPECIAL_PATTERN_KEY ? normalizeSpecialPatternArray(source?.patterns) : null;
           if(source){
             if(typeof source.qty === 'number' && Number.isFinite(source.qty)){
               qty = source.qty;
@@ -3091,16 +3203,25 @@ function ptcgdm_render_builder(array $config = []){
           }
           const hasQty = Number.isFinite(qty);
           const hasPrice = Number.isFinite(price);
+          const hasPatternData = key === SPECIAL_PATTERN_KEY && hasSpecialPatternData({ patterns });
           if(allowNegative){
-            if((hasQty && qty !== 0) || hasPrice){
+            if((hasQty && qty !== 0) || hasPrice || hasPatternData){
               result.variants[key] = { qty: hasQty ? qty : 0 };
               if(hasPrice) result.variants[key].price = price;
+              if(key === SPECIAL_PATTERN_KEY && patterns){
+                result.variants[key].patterns = patterns;
+                recomputeSpecialPatternVariant(result.variants[key]);
+              }
               hasData = true;
             }
           }else{
-            if((hasQty && qty > 0) || hasPrice){
+            if((hasQty && qty > 0) || hasPrice || hasPatternData){
               result.variants[key] = { qty: hasQty ? Math.max(0, qty) : 0 };
               if(hasPrice) result.variants[key].price = price;
+              if(key === SPECIAL_PATTERN_KEY && patterns){
+                result.variants[key].patterns = patterns;
+                recomputeSpecialPatternVariant(result.variants[key]);
+              }
               hasData = true;
             }
           }
@@ -3171,6 +3292,37 @@ function ptcgdm_render_builder(array $config = []){
         return result;
       }
 
+      function mergeSpecialPatternArrays(basePatterns, incomingPatterns, options = {}){
+        const { allowNegative = false } = options;
+        const base = normalizeSpecialPatternArray(basePatterns);
+        const incoming = normalizeSpecialPatternArray(incomingPatterns);
+        const merged = [];
+        for(let i = 0; i < SPECIAL_PATTERN_SLOT_COUNT; i++){
+          const baseSlot = base[i] || {};
+          const incomingSlot = incoming[i] || {};
+          const baseQty = Number.isFinite(baseSlot.qty) ? baseSlot.qty : parseInt(baseSlot.qty, 10) || 0;
+          const deltaQty = Number.isFinite(incomingSlot.qty) ? incomingSlot.qty : parseInt(incomingSlot.qty, 10) || 0;
+          let nextQty = allowNegative ? baseQty + deltaQty : baseQty + Math.max(0, deltaQty);
+          if(nextQty < 0) nextQty = 0;
+          const incomingPrice = Number.isFinite(incomingSlot.price) ? incomingSlot.price : parsePriceValue(incomingSlot.price);
+          const basePrice = Number.isFinite(baseSlot.price) ? baseSlot.price : parsePriceValue(baseSlot.price);
+          const incomingName = typeof incomingSlot.name === 'string' ? incomingSlot.name.trim() : '';
+          const baseName = typeof baseSlot.name === 'string' ? baseSlot.name.trim() : '';
+          const slot = { qty: nextQty };
+          if(Number.isFinite(incomingPrice)){
+            slot.price = incomingPrice;
+          }else if(Number.isFinite(basePrice)){
+            slot.price = basePrice;
+          }
+          const finalName = incomingName || baseName;
+          if(finalName){
+            slot.name = finalName;
+          }
+          merged.push(slot);
+        }
+        return merged;
+      }
+
       function aggregateInventoryEntries(baseEntries, additions){
         const totals = new Map();
         function getRecord(id){
@@ -3190,18 +3342,34 @@ function ptcgdm_render_builder(array $config = []){
               const variant = normalized.variants[key];
               if(!variant) return;
               const current = record.variants[key] && typeof record.variants[key] === 'object' ? record.variants[key] : { qty: 0, price: null };
+              const variantPrice = Number.isFinite(variant.price) ? variant.price : parsePriceValue(variant.price);
+              const currentPrice = Number.isFinite(current.price) ? current.price : parsePriceValue(current.price);
+              if(key === SPECIAL_PATTERN_KEY){
+                const mergedPatterns = mergeSpecialPatternArrays(current.patterns, variant.patterns, { allowNegative: false });
+                const result = {
+                  qty: 0,
+                  price: Number.isFinite(variantPrice) ? variantPrice : (Number.isFinite(currentPrice) ? currentPrice : null),
+                  patterns: mergedPatterns,
+                };
+                recomputeSpecialPatternVariant(result);
+                if(result.qty > 0 || Number.isFinite(result.price) || hasSpecialPatternData(result)){
+                  record.variants[key] = result;
+                }else{
+                  delete record.variants[key];
+                }
+                return;
+              }
               const baseQty = Number.isFinite(current.qty) ? current.qty : parseInt(current.qty, 10) || 0;
               const addQtyRaw = Number.isFinite(variant.qty) ? variant.qty : parseInt(variant.qty, 10) || 0;
               const addQty = addQtyRaw > 0 ? addQtyRaw : 0;
               const nextQty = baseQty + addQty;
-              const price = Number.isFinite(variant.price) ? variant.price : parsePriceValue(variant.price);
               const result = { qty: nextQty };
-              if(Number.isFinite(price)){
-                result.price = price;
-              }else if(Number.isFinite(current.price)){
-                result.price = current.price;
+              if(Number.isFinite(variantPrice)){
+                result.price = variantPrice;
+              }else if(Number.isFinite(currentPrice)){
+                result.price = currentPrice;
               }
-              if(nextQty > 0 || Number.isFinite(result.price)){
+              if(result.qty > 0 || Number.isFinite(result.price)){
                 record.variants[key] = result;
               }else{
                 delete record.variants[key];
@@ -3220,20 +3388,36 @@ function ptcgdm_render_builder(array $config = []){
               const variant = normalized.variants[key];
               if(!variant) return;
               const current = record.variants[key] && typeof record.variants[key] === 'object' ? record.variants[key] : { qty: 0, price: null };
+              const variantPrice = Number.isFinite(variant.price) ? variant.price : parsePriceValue(variant.price);
+              const currentPrice = Number.isFinite(current.price) ? current.price : parsePriceValue(current.price);
+              if(key === SPECIAL_PATTERN_KEY){
+                const mergedPatterns = mergeSpecialPatternArrays(current.patterns, variant.patterns, { allowNegative: true });
+                const result = {
+                  qty: 0,
+                  price: Number.isFinite(variantPrice) ? variantPrice : (Number.isFinite(currentPrice) ? currentPrice : null),
+                  patterns: mergedPatterns,
+                };
+                recomputeSpecialPatternVariant(result);
+                if(result.qty > 0 || Number.isFinite(result.price) || hasSpecialPatternData(result)){
+                  record.variants[key] = result;
+                }else{
+                  delete record.variants[key];
+                }
+                return;
+              }
               const baseQty = Number.isFinite(current.qty) ? current.qty : parseInt(current.qty, 10) || 0;
               const delta = Number.isFinite(variant.qty) ? variant.qty : parseInt(variant.qty, 10) || 0;
               let nextQty = baseQty + delta;
               if(nextQty <= 0){
                 nextQty = 0;
               }
-              const price = Number.isFinite(variant.price) ? variant.price : parsePriceValue(variant.price);
               const result = { qty: nextQty };
-              if(Number.isFinite(price)){
-                result.price = price;
-              }else if(Number.isFinite(current.price)){
-                result.price = current.price;
+              if(Number.isFinite(variantPrice)){
+                result.price = variantPrice;
+              }else if(Number.isFinite(currentPrice)){
+                result.price = currentPrice;
               }
-              if(nextQty > 0 || Number.isFinite(result.price)){
+              if(result.qty > 0 || Number.isFinite(result.price)){
                 record.variants[key] = result;
               }else{
                 delete record.variants[key];
@@ -3250,13 +3434,21 @@ function ptcgdm_render_builder(array $config = []){
           variantKeys.forEach((key)=>{
             const data = record.variants[key];
             if(!data || typeof data !== 'object') return;
+            if(key === SPECIAL_PATTERN_KEY){
+              recomputeSpecialPatternVariant(data);
+            }
             const qty = Number.isFinite(data.qty) ? data.qty : parseInt(data.qty, 10) || 0;
             const price = Number.isFinite(data.price) ? data.price : parsePriceValue(data.price);
-            if(qty > 0 || Number.isFinite(price)){
+            const patterns = key === SPECIAL_PATTERN_KEY ? normalizeSpecialPatternArray(data.patterns) : null;
+            const hasPatterns = key === SPECIAL_PATTERN_KEY && hasSpecialPatternData({ patterns });
+            if(qty > 0 || Number.isFinite(price) || hasPatterns){
               variantsOut[key] = { qty };
               if(Number.isFinite(price)){
                 variantsOut[key].price = price;
                 if(firstPrice === null) firstPrice = price;
+              }
+              if(hasPatterns){
+                variantsOut[key].patterns = patterns;
               }
               if(qty > 0){
                 totalQty += qty;
@@ -3303,7 +3495,25 @@ function ptcgdm_render_builder(array $config = []){
             total += entryTotal;
             const variantCells = [];
             INVENTORY_VARIANTS.forEach(({ key, label })=>{
-              const variantData = d.variants && typeof d.variants === 'object' ? d.variants[key] : null;
+              const variantData = getInventoryVariant(d, key);
+              if(key === SPECIAL_PATTERN_KEY){
+                const patterns = ensureSpecialPatternSlots(variantData);
+                const blocks = patterns.map((pattern, slotIndex)=>{
+                  const qtyRaw = pattern && pattern.qty !== undefined ? pattern.qty : 0;
+                  const qtyValue = Number.isFinite(qtyRaw) ? qtyRaw : parseInt(qtyRaw, 10) || 0;
+                  const priceValue = pattern ? formatPriceInputValue(pattern.price) : '';
+                  const nameValue = pattern && typeof pattern.name === 'string' ? pattern.name : '';
+                  const patternLabel = `Pattern ${slotIndex + 1}`;
+                  return `<div class="special-pattern-block">
+                    <p class="special-pattern-label">${esc(patternLabel)}</p>
+                    <input class="special-pattern-input special-pattern-qty" data-variant="${key}" data-slot="${slotIndex}" data-field="qty" type="number" min="${INVENTORY_BUFFER_MIN}" max="${INVENTORY_BUFFER_MAX}" value="${qtyValue}" placeholder="Qty">
+                    <input class="special-pattern-input special-pattern-price" data-variant="${key}" data-slot="${slotIndex}" data-field="price" type="number" step="0.01" min="0" value="${priceValue}" placeholder="Price">
+                    <input class="special-pattern-input special-pattern-name" data-variant="${key}" data-slot="${slotIndex}" data-field="name" type="text" value="${esc(nameValue)}" placeholder="Pattern name">
+                  </div>`;
+                });
+                variantCells.push(`<td class="special-pattern-cell" colspan="2"><div class="special-pattern-grid">${blocks.join('')}</div></td>`);
+                return;
+              }
               const qtyValueRaw = variantData && variantData.qty !== undefined ? variantData.qty : 0;
               const qtyValue = Number.isFinite(qtyValueRaw) ? qtyValueRaw : parseInt(qtyValueRaw, 10) || 0;
               const priceValue = variantData ? formatPriceInputValue(variantData.price) : '';
@@ -3371,6 +3581,42 @@ function ptcgdm_render_builder(array $config = []){
                 variant.price = Number.isFinite(nextPrice) ? nextPrice : null;
                 cleanInventoryVariant(entry, variantKey);
                 ev.target.value = formatPriceInputValue(variant.price);
+                updateJSON();
+              });
+            });
+            tr.querySelectorAll('.special-pattern-input').forEach(input=>{
+              input.addEventListener('change',(ev)=>{
+                const variantKey = ev.target?.dataset?.variant;
+                const slotIndexRaw = ev.target?.dataset?.slot;
+                const field = ev.target?.dataset?.field || '';
+                if(variantKey !== SPECIAL_PATTERN_KEY) return;
+                const slotIndex = parseInt(slotIndexRaw, 10);
+                if(Number.isNaN(slotIndex)) return;
+                const rowIndex = deckMap.get(id);
+                if(rowIndex === undefined) return;
+                const entry = deck[rowIndex];
+                const variant = getInventoryVariant(entry, variantKey);
+                const patterns = ensureSpecialPatternSlots(variant);
+                const slot = patterns[slotIndex];
+                if(!slot) return;
+                if(field === 'qty'){
+                  let next = parseInt(ev.target.value, 10);
+                  if(Number.isNaN(next)) next = 0;
+                  if(next > INVENTORY_BUFFER_MAX) next = INVENTORY_BUFFER_MAX;
+                  if(next < INVENTORY_BUFFER_MIN) next = INVENTORY_BUFFER_MIN;
+                  slot.qty = next;
+                  ev.target.value = slot.qty;
+                }else if(field === 'price'){
+                  const nextPrice = parsePriceInput(ev.target.value);
+                  slot.price = Number.isFinite(nextPrice) ? nextPrice : null;
+                  ev.target.value = formatPriceInputValue(slot.price);
+                }else if(field === 'name'){
+                  slot.name = typeof ev.target.value === 'string' ? ev.target.value.trim() : '';
+                }
+                recomputeSpecialPatternVariant(variant);
+                cleanInventoryVariant(entry, variantKey);
+                sumInventoryVariantQuantities(entry);
+                renderDeckTable();
                 updateJSON();
               });
             });
