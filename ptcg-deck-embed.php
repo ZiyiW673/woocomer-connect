@@ -5725,7 +5725,7 @@ function ptcgdm_filter_managed_product_thumbnail($image, $post, $thumbnail_id, $
 
 add_filter('woocommerce_get_product_thumbnail', 'ptcgdm_filter_managed_product_thumbnail', 10, 5);
 
-function ptcgdm_filter_managed_order_item_thumbnail($image, $item_id, $item) {
+function ptcgdm_filter_managed_order_item_thumbnail($image, $item, $order = null) {
   if (!class_exists('WC_Order_Item_Product') || !($item instanceof WC_Order_Item_Product)) {
     return $image;
   }
@@ -5755,9 +5755,10 @@ function ptcgdm_filter_managed_order_item_thumbnail($image, $item_id, $item) {
   }
 
   return $image;
+  return $image;
 }
 
-add_filter('woocommerce_order_item_thumbnail', 'ptcgdm_filter_managed_order_item_thumbnail', 10, 3);
+add_filter('woocommerce_order_item_thumbnail', 'ptcgdm_filter_managed_order_item_thumbnail', 10, 2);
 
 function ptcgdm_filter_managed_product_image_attributes($attr, $attachment, $size) {
   if (!is_array($attr) || empty($attr['class']) || strpos((string) $attr['class'], 'ptcgdm-managed-product-image') === false) {
