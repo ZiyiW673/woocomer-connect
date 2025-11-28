@@ -2543,7 +2543,17 @@ function ptcgdm_render_builder(array $config = []){
       function findCardIdBySetAndNumber(setId, number){
         const keyBase = makeSetKey(setId);
         if(!keyBase) return '';
-        const variants = normaliseNumberVariants(number);
+        const variants = new Set(normaliseNumberVariants(number));
+        if(DATASET_KEY === 'one_piece'){
+          const setPrefix = String(setId || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '');
+          const rawNumber = String(number || '').trim().toLowerCase();
+          if(setPrefix && rawNumber){
+            const strippedNumber = rawNumber.replace(new RegExp(`^${setPrefix}[-_\s]*`), '');
+            if(strippedNumber && strippedNumber !== rawNumber){
+              normaliseNumberVariants(strippedNumber).forEach(variant => variants.add(variant));
+            }
+          }
+        }
         for(const variant of variants){
           const key = `${keyBase}|${variant}`;
           if(setNumberIndex.has(key)) return setNumberIndex.get(key);
