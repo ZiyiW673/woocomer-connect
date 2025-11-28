@@ -748,7 +748,19 @@ function ptcgdm_render_builder(array $config = []){
         </div>
       </div>
 
-      <?php if ($dataset_key !== 'one_piece') : ?>
+      <?php if ($dataset_key === 'one_piece') : ?>
+      <div style="margin-top:16px">
+        <label for="bulkInput">Bulk Add by Code</label>
+        <textarea id="bulkInput" class="bulk-input" rows="6" placeholder="OP13-001 5" spellcheck="false"></textarea>
+        <p class="description">Enter one card per line using the set-and-card code plus quantity, e.g., <code>OP13-001 5</code>.</p>
+        <div class="bulk-actions">
+          <button id="btnBulkAdd" class="btn secondary" disabled>Add cards</button>
+          <button id="btnClearDeck" class="btn danger" disabled><?php echo esc_html($clear_button_label); ?></button>
+          <div class="spacer"></div>
+          <div id="bulkStatus" class="muted bulk-status"></div>
+        </div>
+      </div>
+      <?php else : ?>
       <div style="margin-top:16px">
         <label for="bulkInput">Bulk Add by Code</label>
         <textarea id="bulkInput" class="bulk-input" rows="8" placeholder="TWM 141/167&#10;MEG 054/132 2 0 0" spellcheck="false"></textarea>
@@ -2354,6 +2366,46 @@ function ptcgdm_render_builder(array $config = []){
             : trimmedLine.split(/\s+/).map(part => part.trim()).filter(Boolean);
           if(tokens.length < 2){
             return { error: 'Enter the set code followed by the card number, e.g., “TWM 141/167”.' };
+          }
+          if(IS_ONE_PIECE){
+            const firstToken = tokens[0] || '';
+            const dashIndex = firstToken.indexOf('-');
+            if(dashIndex > 0 && dashIndex < firstToken.length - 1){
+              const setTokenRaw = firstToken.slice(0, dashIndex);
+              const numberTokenRaw = firstToken.slice(dashIndex + 1);
+              const remainingTokens = tokens.slice(1);
+              const qtyTokenRaw = remainingTokens.shift();
+              if(qtyTokenRaw === undefined || qtyTokenRaw === null || String(qtyTokenRaw).trim() === ''){
+                return { error: 'Add a quantity after the card code, e.g., “OP13-001 5”.' };
+              }
+              if(remainingTokens.length){
+                return { error: 'Use “SET-ID quantity”, e.g., “OP13-001 5”.' };
+              }
+              const setClean = String(setTokenRaw || '').trim();
+              const numberClean = String(numberTokenRaw || '').trim();
+              const sanitisedSet = setClean.replace(/[^0-9a-zA-Z-]+/g,'');
+              const sanitisedNumber = numberClean.replace(/[^0-9a-zA-Z\/+-]+/g,'');
+              if(!sanitisedSet) return { error: 'Missing set code.' };
+              if(!sanitisedNumber) return { error: 'Missing card number.' };
+              if(!/^[-+]?\d+$/.test(String(qtyTokenRaw).trim())){
+                return { error: 'Quantity must be a whole number.' };
+              }
+              const parsedQty = clampBufferQty(parseInt(qtyTokenRaw, 10));
+              const slashIndex = sanitisedNumber.indexOf('/');
+              const lookupNumber = slashIndex >= 0 ? sanitisedNumber.slice(0, slashIndex) : sanitisedNumber;
+              if(!lookupNumber) return { error: 'Missing card number.' };
+              const variantQuantities = { normal: parsedQty };
+              const hasQuantities = true;
+              return {
+                qty: parsedQty,
+                setCode: sanitisedSet,
+                setCodeDisplay: sanitisedSet.toUpperCase(),
+                number: lookupNumber,
+                numberDisplay: sanitisedNumber.toUpperCase(),
+                variantQuantities,
+                hasQuantities,
+              };
+            }
           }
           const setTokenRaw = tokens.shift();
           const numberTokenRaw = tokens.shift();
