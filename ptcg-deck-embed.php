@@ -5714,6 +5714,8 @@ function ptcgdm_refresh_product_image_cache($product) {
     return;
   }
 
+  $dataset_key = ptcgdm_normalize_inventory_dataset_key($dataset_key);
+
   $product_id = $product->get_id();
   if (!$product_id) {
     return;
@@ -7577,7 +7579,7 @@ function ptcgdm_delete_product_variations($product_id) {
   }
 }
 
-function ptcgdm_sync_inventory_product_variations($product, array $active_variants, $sku) {
+function ptcgdm_sync_inventory_product_variations($product, array $active_variants, $sku, $dataset_key = '') {
   if (!($product instanceof WC_Product_Variable)) {
     return null;
   }
@@ -7747,6 +7749,9 @@ function ptcgdm_sync_inventory_product_variations($product, array $active_varian
       $variation->set_attributes($attributes);
     }
     $variation->update_meta_data('_ptcgdm_variant_key', $variant_key);
+    if ($dataset_key !== '') {
+      $variation->update_meta_data('_ptcgdm_dataset', $dataset_key);
+    }
     if (method_exists($variation, 'set_manage_stock')) {
       $variation->set_manage_stock(true);
     }
@@ -8202,6 +8207,9 @@ function ptcgdm_sync_inventory_products(array $entries, array $context = []) {
 
       $product->set_catalog_visibility('visible');
       $product->update_meta_data('_ptcgdm_managed', '1');
+      if ($dataset_key !== '') {
+        $product->update_meta_data('_ptcgdm_dataset', $dataset_key);
+      }
       $product->update_meta_data('_ptcgdm_card_id', $card_id);
       if ($description !== '') {
         $product->set_description($description);
@@ -8214,7 +8222,7 @@ function ptcgdm_sync_inventory_products(array $entries, array $context = []) {
       }
 
       $product->update_meta_data('_ptcgdm_variant_key', 'variable');
-      $min_price = ptcgdm_sync_inventory_product_variations($product, $active_variants, $sku);
+      $min_price = ptcgdm_sync_inventory_product_variations($product, $active_variants, $sku, $dataset_key);
       if ($min_price !== null) {
         $formatted_price = function_exists('wc_format_decimal') ? wc_format_decimal($min_price) : number_format((float) $min_price, 2, '.', '');
         $product->set_regular_price($formatted_price);
@@ -8249,7 +8257,7 @@ function ptcgdm_sync_inventory_products(array $entries, array $context = []) {
       $synced_skus[$sku] = true;
     }
 
-    ptcgdm_zero_unlisted_inventory_products($synced_skus);
+    ptcgdm_zero_unlisted_inventory_products($synced_skus, $dataset_key);
   } finally {
     ptcgdm_set_inventory_syncing($previous_sync_state);
   }
@@ -8259,8 +8267,13 @@ function ptcgdm_sync_inventory_products(array $entries, array $context = []) {
   return $summary;
 }
 
-function ptcgdm_zero_unlisted_inventory_products(array $active_skus) {
+function ptcgdm_zero_unlisted_inventory_products(array $active_skus, $dataset_key = '') {
   if (!function_exists('wc_get_products')) {
+    return;
+  }
+
+  $dataset_key = ptcgdm_normalize_inventory_dataset_key($dataset_key);
+  if ($dataset_key === '') {
     return;
   }
 
@@ -8273,6 +8286,11 @@ function ptcgdm_zero_unlisted_inventory_products(array $active_skus) {
       [
         'key'   => '_ptcgdm_managed',
         'value' => '1',
+      ],
+      [
+        'key'   => '_ptcgdm_dataset',
+        'value' => $dataset_key,
+        'compare' => '=',
       ],
     ],
   ]);
