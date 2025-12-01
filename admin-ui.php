@@ -62,6 +62,18 @@ function ptcgdm_render_admin_orders_panel() {
     return;
   }
 
+  $statuses       = wc_get_order_statuses();
+  $status_options = '';
+  foreach ($statuses as $key => $label) {
+    $status_options .= '<option value="' . esc_attr($key) . '">' . esc_html($label) . '</option>';
+  }
+
+  $nonce    = wp_create_nonce('ptcgdm_update_order_status');
+  $ajax_url = esc_url(admin_url('admin-ajax.php'));
+
+  echo '<div class="ptcgdm-orders" data-ajax-url="' . $ajax_url . '" data-nonce="' . esc_attr($nonce) . '">';
+
+  echo '<div class="ptcgdm-orders__list is-active">';
   echo '<table class="ptcgdm-orders__table">';
   echo '<thead><tr>';
   echo '<th scope="col">Order</th>';
@@ -69,6 +81,7 @@ function ptcgdm_render_admin_orders_panel() {
   echo '<th scope="col">Status</th>';
   echo '<th scope="col">Total</th>';
   echo '<th scope="col">Customer</th>';
+  echo '<th scope="col">Actions</th>';
   echo '</tr></thead>';
   echo '<tbody>';
 
@@ -77,8 +90,10 @@ function ptcgdm_render_admin_orders_panel() {
       continue;
     }
 
+    $order_id    = $order->get_id();
     $order_number = esc_html($order->get_order_number());
-    $status       = esc_html(wc_get_order_status_name($order->get_status()));
+    $status_value = $order->get_status();
+    $status_label = esc_html(wc_get_order_status_name($status_value));
 
     $date_created = $order->get_date_created();
     $date_label   = $date_created ? esc_html($date_created->date_i18n(get_option('date_format') . ' ' . get_option('time_format'))) : '-';
@@ -90,17 +105,80 @@ function ptcgdm_render_admin_orders_panel() {
       $total = wc_price($order->get_total());
     }
 
-    echo '<tr>';
+    echo '<tr id="ptcgdm-order-row-' . esc_attr($order_id) . '">';
     echo '<td>#' . $order_number . '</td>';
     echo '<td>' . $date_label . '</td>';
-    echo '<td>' . $status . '</td>';
+    echo '<td class="ptcgdm-order-status">' . $status_label . '</td>';
     echo '<td>' . wp_kses_post($total) . '</td>';
     echo '<td>' . $customer_name . '</td>';
+    echo '<td><button type="button" class="ptcgdm-order-detail-btn" data-order-id="' . esc_attr($order_id) . '">View details</button></td>';
     echo '</tr>';
   }
 
   echo '</tbody>';
   echo '</table>';
+  echo '</div>';
+
+  foreach ($orders as $order) {
+    if (!$order instanceof WC_Order) {
+      continue;
+    }
+
+    $order_id = $order->get_id();
+
+    $date_created = $order->get_date_created();
+    $date_label   = $date_created ? esc_html($date_created->date_i18n(get_option('date_format') . ' ' . get_option('time_format'))) : '-';
+    $status_value = $order->get_status();
+    $status_label = esc_html(wc_get_order_status_name($status_value));
+
+    echo '<div class="ptcgdm-orders__detail-panel" id="ptcgdm-order-detail-' . esc_attr($order_id) . '">';
+    echo '<button type="button" class="ptcgdm-orders__back" data-order-id="' . esc_attr($order_id) . '">&larr; Back to orders</button>';
+    echo '<h3>Order #' . esc_html($order->get_order_number()) . '</h3>';
+    echo '<p class="ptcgdm-orders__meta">Date: <strong>' . $date_label . '</strong></p>';
+    echo '<p class="ptcgdm-orders__meta">Status: <strong class="ptcgdm-order-detail-status">' . $status_label . '</strong></p>';
+
+    echo '<h4>Products</h4>';
+    echo '<table class="ptcgdm-orders__table ptcgdm-orders__table--nested">';
+    echo '<thead><tr><th scope="col">Product</th><th scope="col">Qty</th><th scope="col">Line total</th></tr></thead><tbody>';
+    foreach ($order->get_items() as $item) {
+      if (!$item instanceof WC_Order_Item_Product) {
+        continue;
+      }
+
+      $product_name = esc_html($item->get_name());
+      $quantity     = absint($item->get_quantity());
+      $line_total   = $item->get_total();
+      $line_total   = is_numeric($line_total) ? wc_price((float) $line_total, ['currency' => $order->get_currency()]) : wc_price($order->get_total());
+
+      echo '<tr>';
+      echo '<td>' . $product_name . '</td>';
+      echo '<td>' . $quantity . '</td>';
+      echo '<td>' . wp_kses_post($line_total) . '</td>';
+      echo '</tr>';
+    }
+    echo '</tbody></table>';
+
+    echo '<div class="ptcgdm-orders__totals">';
+    echo '<p><strong>Subtotal:</strong> ' . wp_kses_post(wc_price($order->get_subtotal(), ['currency' => $order->get_currency()])) . '</p>';
+    echo '<p><strong>Discount:</strong> ' . wp_kses_post(wc_price($order->get_discount_total(), ['currency' => $order->get_currency()])) . '</p>';
+    echo '<p><strong>Shipping:</strong> ' . wp_kses_post(wc_price($order->get_shipping_total(), ['currency' => $order->get_currency()])) . '</p>';
+    echo '<p><strong>Tax:</strong> ' . wp_kses_post(wc_price($order->get_total_tax(), ['currency' => $order->get_currency()])) . '</p>';
+    echo '<p><strong>Total:</strong> ' . wp_kses_post($order->get_formatted_order_total()) . '</p>';
+    echo '</div>';
+
+    echo '<form class="ptcgdm-order-status-form" data-order-id="' . esc_attr($order_id) . '">';
+    echo '<label for="ptcgdm-status-' . esc_attr($order_id) . '"><strong>Update status</strong></label><br />';
+    echo '<select id="ptcgdm-status-' . esc_attr($order_id) . '" name="status">';
+    echo str_replace('value="' . esc_attr($status_value) . '"', 'value="' . esc_attr($status_value) . '" selected', $status_options);
+    echo '</select> ';
+    echo '<button type="submit">Save</button>';
+    echo '<span class="ptcgdm-order-status__message" aria-live="polite"></span>';
+    echo '</form>';
+
+    echo '</div>';
+  }
+
+  echo '</div>';
   echo '</div>';
 }
 
@@ -139,10 +217,19 @@ function ptcgdm_get_admin_ui_content() {
       .ptcgdm-admin-ui__content { min-height: 360px; }
       .ptcgdm-admin-ui__panel { display: none; }
       .ptcgdm-admin-ui__panel.is-active { display: block; }
+      .ptcgdm-orders__list.is-active, .ptcgdm-orders__detail-panel.is-active { display: block; }
+      .ptcgdm-orders__detail-panel { display: none; background: #0f1218; border: 1px solid #1f2533; border-radius: 12px; padding: 16px; color: #cfd6e6; }
+      .ptcgdm-orders__back { background: none; border: none; color: #7ea6ff; cursor: pointer; margin-bottom: 12px; font-weight: 600; }
       .ptcgdm-orders__table { width: 100%; border-collapse: collapse; background: #0f1218; border: 1px solid #1f2533; border-radius: 12px; overflow: hidden; }
       .ptcgdm-orders__table th, .ptcgdm-orders__table td { padding: 10px 12px; text-align: left; border-bottom: 1px solid #1f2533; color: #cfd6e6; }
       .ptcgdm-orders__table th { background: #111725; font-weight: 700; }
       .ptcgdm-orders__table tr:last-child td { border-bottom: none; }
+      .ptcgdm-orders__table--nested { margin-top: 8px; }
+      .ptcgdm-orders__meta { margin: 4px 0; }
+      .ptcgdm-orders__totals p { margin: 4px 0; }
+      .ptcgdm-order-detail-btn { background: #1b2034; border: 1px solid #324061; color: #fff; padding: 6px 10px; border-radius: 8px; cursor: pointer; }
+      .ptcgdm-order-status-form { margin-top: 12px; }
+      .ptcgdm-order-status__message { margin-left: 8px; }
       .ptcgdm-orders__empty { padding: 12px; background: #0f1218; border: 1px solid #1f2533; border-radius: 12px; color: #cfd6e6; }
       @media (max-width: 900px) {
         .ptcgdm-admin-ui__shell { grid-template-columns: 1fr; }
@@ -196,6 +283,101 @@ function ptcgdm_get_admin_ui_content() {
             activate(slug);
           });
         });
+
+        const ordersWrapper = wrapper.querySelector('.ptcgdm-orders');
+        if (ordersWrapper) {
+          const listView = ordersWrapper.querySelector('.ptcgdm-orders__list');
+          const detailPanels = Array.from(ordersWrapper.querySelectorAll('.ptcgdm-orders__detail-panel'));
+          const viewButtons = Array.from(ordersWrapper.querySelectorAll('.ptcgdm-order-detail-btn'));
+          const backButtons = Array.from(ordersWrapper.querySelectorAll('.ptcgdm-orders__back'));
+          const statusForms = Array.from(ordersWrapper.querySelectorAll('.ptcgdm-order-status-form'));
+
+          const showList = () => {
+            if (listView) {
+              listView.classList.add('is-active');
+            }
+            detailPanels.forEach((panel) => panel.classList.remove('is-active'));
+          };
+
+          const showDetail = (orderId) => {
+            if (listView) {
+              listView.classList.remove('is-active');
+            }
+            detailPanels.forEach((panel) => {
+              const isMatch = panel.id === 'ptcgdm-order-detail-' + orderId;
+              panel.classList.toggle('is-active', isMatch);
+            });
+          };
+
+          viewButtons.forEach((btn) => {
+            btn.addEventListener('click', () => {
+              const id = btn.dataset.orderId;
+              if (!id) return;
+              showDetail(id);
+            });
+          });
+
+          backButtons.forEach((btn) => {
+            btn.addEventListener('click', () => {
+              showList();
+            });
+          });
+
+          const ajaxUrl = ordersWrapper.dataset.ajaxUrl;
+          const nonce = ordersWrapper.dataset.nonce;
+
+          const updateStatusLabel = (orderId, label) => {
+            const row = ordersWrapper.querySelector('#ptcgdm-order-row-' + orderId + ' .ptcgdm-order-status');
+            if (row && label) {
+              row.textContent = label;
+            }
+
+            const detailStatus = ordersWrapper.querySelector('#ptcgdm-order-detail-' + orderId + ' .ptcgdm-order-detail-status');
+            if (detailStatus && label) {
+              detailStatus.textContent = label;
+            }
+          };
+
+          statusForms.forEach((form) => {
+            form.addEventListener('submit', async (event) => {
+              event.preventDefault();
+
+              if (!ajaxUrl || !nonce) return;
+
+              const orderId = form.dataset.orderId;
+              const select = form.querySelector('select[name="status"]');
+              const message = form.querySelector('.ptcgdm-order-status__message');
+              const setMessage = (text) => { if (message) message.textContent = text; };
+
+              if (!orderId || !select) return;
+
+              setMessage('Saving...');
+
+              try {
+                const response = await fetch(ajaxUrl, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' },
+                  body: new URLSearchParams({
+                    action: 'ptcgdm_update_order_status',
+                    nonce,
+                    order_id: orderId,
+                    status: select.value,
+                  }),
+                });
+
+                const data = await response.json();
+                if (data && data.success && data.data && data.data.label) {
+                  updateStatusLabel(orderId, data.data.label);
+                  setMessage('Updated.');
+                } else {
+                  setMessage(data && data.data ? data.data : 'Unable to update status.');
+                }
+              } catch (err) {
+                setMessage('Request failed.');
+              }
+            });
+          });
+        }
       })();
     </script>
   </div>
@@ -229,6 +411,47 @@ function ptcgdm_register_admin_ui_shortcode() {
   add_shortcode('ptcg_admin_ui', 'ptcgdm_render_admin_ui_shortcode');
 }
 add_action('init', 'ptcgdm_register_admin_ui_shortcode');
+
+/**
+ * Handle order status updates from the Admin UI page.
+ */
+function ptcgdm_handle_update_order_status() {
+  if (!current_user_can('manage_woocommerce')) {
+    wp_send_json_error(__('You do not have permission to update orders.', 'woocommerce'));
+  }
+
+  check_ajax_referer('ptcgdm_update_order_status', 'nonce');
+
+  $order_id = isset($_POST['order_id']) ? absint(wp_unslash($_POST['order_id'])) : 0;
+  $status   = isset($_POST['status']) ? sanitize_key(wp_unslash($_POST['status'])) : '';
+
+  if ($order_id <= 0 || empty($status)) {
+    wp_send_json_error(__('Invalid order or status.', 'woocommerce'));
+  }
+
+  if (strpos($status, 'wc-') !== 0) {
+    $status = 'wc-' . $status;
+  }
+
+  $valid_statuses = array_keys(wc_get_order_statuses());
+  if (!in_array($status, $valid_statuses, true)) {
+    wp_send_json_error(__('Status not allowed.', 'woocommerce'));
+  }
+
+  $order = wc_get_order($order_id);
+  if (!$order instanceof WC_Order) {
+    wp_send_json_error(__('Order not found.', 'woocommerce'));
+  }
+
+  $order->set_status($status);
+  $order->save();
+
+  wp_send_json_success([
+    'status' => $status,
+    'label'  => wc_get_order_status_name($status),
+  ]);
+}
+add_action('wp_ajax_ptcgdm_update_order_status', 'ptcgdm_handle_update_order_status');
 
 /**
  * Ensure a public page exists that renders the Admin UI via shortcode.
