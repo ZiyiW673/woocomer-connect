@@ -25,7 +25,7 @@ function ptcgdm_get_admin_ui_content() {
  */
 function ptcgdm_render_admin_ui_page() {
   echo '<div class="ptcgdm-admin-ui">'
-    . '<style>.ptcgdm-admin-ui .wrap > h1{display:none;} .ptcgdm-admin-ui .wrap > p.description{margin-top:0;}</style>'
+    . '<style>.ptcgdm-admin-ui .wrap > h1{display:none;} .ptcgdm-admin-ui .wrap > p.description{display:none;}</style>'
     . ptcgdm_get_admin_ui_content()
     . '</div>';
 }
