@@ -6,6 +6,7 @@
  */
 if (!defined('ABSPATH')) exit;
 
+define('PTCGDM_PLUGIN_FILE', __FILE__);
 define('PTCGDM_DIR', plugin_dir_path(__FILE__));
 define('PTCGDM_URL', plugin_dir_url(__FILE__));
 define('PTCGDM_DATA_DIR', PTCGDM_DIR . 'pokemon-tcg-data');
@@ -23,6 +24,9 @@ define('PTCGDM_INVENTORY_VARIANTS', [
 ]);
 
 require_once PTCGDM_DIR . 'admin-ui.php';
+
+register_activation_hook(PTCGDM_PLUGIN_FILE, 'ptcgdm_ensure_admin_ui_page_exists');
+add_action('init', 'ptcgdm_ensure_admin_ui_page_exists');
 
 function ptcgdm_get_dataset_definitions() {
   static $definitions = null;
