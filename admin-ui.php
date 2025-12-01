@@ -245,7 +245,7 @@ function ptcgdm_get_admin_ui_content() {
       .ptcgdm-order-status__message { margin-left: 8px; }
       .ptcgdm-orders__empty { padding: 12px; background: #0f1218; border: 1px solid #1f2533; border-radius: 12px; color: #cfd6e6; }
       .ptcgdm-product-popover { position: absolute; display: none; background: #0f1218; border: 1px solid #1f2533; border-radius: 8px; padding: 6px; box-shadow: 0 10px 30px rgba(0,0,0,0.35); z-index: 9999; }
-      .ptcgdm-product-popover img { display: block; width: 90px; height: auto; }
+      .ptcgdm-product-popover img { display: block; width: 180px; height: auto; }
       @media (max-width: 900px) {
         .ptcgdm-admin-ui__shell { grid-template-columns: 1fr; }
         .ptcgdm-admin-ui__sidebar { position: static; }
