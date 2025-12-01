@@ -217,6 +217,7 @@ function ptcgdm_get_admin_ui_content() {
       .ptcgdm-admin-ui__content { min-height: 360px; }
       .ptcgdm-admin-ui__panel { display: none; }
       .ptcgdm-admin-ui__panel.is-active { display: block; }
+      .ptcgdm-orders__list { display: none; }
       .ptcgdm-orders__list.is-active, .ptcgdm-orders__detail-panel.is-active { display: block; }
       .ptcgdm-orders__detail-panel { display: none; background: #0f1218; border: 1px solid #1f2533; border-radius: 12px; padding: 16px; color: #cfd6e6; }
       .ptcgdm-orders__back { background: none; border: none; color: #7ea6ff; cursor: pointer; margin-bottom: 12px; font-weight: 600; }
