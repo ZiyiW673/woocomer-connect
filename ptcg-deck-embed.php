@@ -22,6 +22,8 @@ define('PTCGDM_INVENTORY_VARIANTS', [
   'stamped'     => 'Stamped',
 ]);
 
+require_once PTCGDM_DIR . 'admin-ui.php';
+
 function ptcgdm_get_dataset_definitions() {
   static $definitions = null;
   if ($definitions !== null) {
