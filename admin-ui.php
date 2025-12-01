@@ -474,6 +474,14 @@ function ptcgdm_render_admin_ui_page() {
  * @return string
  */
 function ptcgdm_render_admin_ui_shortcode() {
+  if (!is_user_logged_in()) {
+    return '<div class="ptcgdm-admin-ui"><p>You must be logged in as an administrator to view this page.</p></div>';
+  }
+
+  if (!current_user_can('administrator')) {
+    return '<div class="ptcgdm-admin-ui"><p>You do not have permission to view this page.</p></div>';
+  }
+
   ob_start();
   ptcgdm_render_admin_ui_page();
   return ob_get_clean();
@@ -491,7 +499,7 @@ add_action('init', 'ptcgdm_register_admin_ui_shortcode');
  * Handle order status updates from the Admin UI page.
  */
 function ptcgdm_handle_update_order_status() {
-  if (!current_user_can('manage_woocommerce')) {
+  if (!current_user_can('administrator')) {
     wp_send_json_error(__('You do not have permission to update orders.', 'woocommerce'));
   }
 
@@ -527,6 +535,24 @@ function ptcgdm_handle_update_order_status() {
   ]);
 }
 add_action('wp_ajax_ptcgdm_update_order_status', 'ptcgdm_handle_update_order_status');
+
+/**
+ * Restrict the public Admin UI page to administrators.
+ */
+function ptcgdm_guard_admin_ui_page() {
+  $page_id = (int) get_option('ptcgdm_admin_ui_page_id', 0);
+
+  if ($page_id > 0 && is_page($page_id)) {
+    if (!is_user_logged_in()) {
+      auth_redirect();
+    }
+
+    if (!current_user_can('administrator')) {
+      wp_die(__('You do not have permission to access this page.'), '', ['response' => 403]);
+    }
+  }
+}
+add_action('template_redirect', 'ptcgdm_guard_admin_ui_page');
 
 /**
  * Ensure a public page exists that renders the Admin UI via shortcode.
