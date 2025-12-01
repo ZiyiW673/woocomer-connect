@@ -145,13 +145,24 @@ function ptcgdm_render_admin_orders_panel() {
         continue;
       }
 
+      $product      = $item->get_product();
+      $image_url    = '';
+      if ($product instanceof WC_Product) {
+        $image_id  = $product->get_image_id();
+        $image_url = $image_id ? wp_get_attachment_image_url($image_id, 'thumbnail') : '';
+      }
+      if (empty($image_url)) {
+        $placeholder = function_exists('wc_placeholder_img_src') ? wc_placeholder_img_src() : '';
+        $image_url   = $placeholder ?: '';
+      }
+
       $product_name = esc_html($item->get_name());
       $quantity     = absint($item->get_quantity());
       $line_total   = $item->get_total();
       $line_total   = is_numeric($line_total) ? wc_price((float) $line_total, ['currency' => $order->get_currency()]) : wc_price($order->get_total());
 
       echo '<tr>';
-      echo '<td>' . $product_name . '</td>';
+      echo '<td><button type="button" class="ptcgdm-product-link" data-image-url="' . esc_url($image_url) . '">' . $product_name . '</button></td>';
       echo '<td>' . $quantity . '</td>';
       echo '<td>' . wp_kses_post($line_total) . '</td>';
       echo '</tr>';
@@ -228,10 +239,13 @@ function ptcgdm_get_admin_ui_content() {
       .ptcgdm-orders__table--nested { margin-top: 8px; }
       .ptcgdm-orders__meta { margin: 4px 0; }
       .ptcgdm-orders__totals p { margin: 4px 0; }
+      .ptcgdm-product-link { background: none; border: none; color: #7ea6ff; cursor: pointer; padding: 0; text-align: left; text-decoration: underline; font: inherit; }
       .ptcgdm-order-detail-btn { background: #1b2034; border: 1px solid #324061; color: #fff; padding: 6px 10px; border-radius: 8px; cursor: pointer; }
       .ptcgdm-order-status-form { margin-top: 12px; }
       .ptcgdm-order-status__message { margin-left: 8px; }
       .ptcgdm-orders__empty { padding: 12px; background: #0f1218; border: 1px solid #1f2533; border-radius: 12px; color: #cfd6e6; }
+      .ptcgdm-product-popover { position: absolute; display: none; background: #0f1218; border: 1px solid #1f2533; border-radius: 8px; padding: 6px; box-shadow: 0 10px 30px rgba(0,0,0,0.35); z-index: 9999; }
+      .ptcgdm-product-popover img { display: block; width: 90px; height: auto; }
       @media (max-width: 900px) {
         .ptcgdm-admin-ui__shell { grid-template-columns: 1fr; }
         .ptcgdm-admin-ui__sidebar { position: static; }
@@ -292,12 +306,34 @@ function ptcgdm_get_admin_ui_content() {
           const viewButtons = Array.from(ordersWrapper.querySelectorAll('.ptcgdm-order-detail-btn'));
           const backButtons = Array.from(ordersWrapper.querySelectorAll('.ptcgdm-orders__back'));
           const statusForms = Array.from(ordersWrapper.querySelectorAll('.ptcgdm-order-status-form'));
+          const productLinks = Array.from(ordersWrapper.querySelectorAll('.ptcgdm-product-link'));
+
+          let productPopover = null;
+          const ensurePopover = () => {
+            if (productPopover) return productPopover;
+            productPopover = document.createElement('div');
+            productPopover.className = 'ptcgdm-product-popover';
+
+            const img = document.createElement('img');
+            img.alt = 'Product image';
+            productPopover.appendChild(img);
+
+            document.body.appendChild(productPopover);
+            return productPopover;
+          };
+
+          const hidePopover = () => {
+            if (productPopover) {
+              productPopover.style.display = 'none';
+            }
+          };
 
           const showList = () => {
             if (listView) {
               listView.classList.add('is-active');
             }
             detailPanels.forEach((panel) => panel.classList.remove('is-active'));
+            hidePopover();
           };
 
           const showDetail = (orderId) => {
@@ -308,6 +344,7 @@ function ptcgdm_get_admin_ui_content() {
               const isMatch = panel.id === 'ptcgdm-order-detail-' + orderId;
               panel.classList.toggle('is-active', isMatch);
             });
+            hidePopover();
           };
 
           viewButtons.forEach((btn) => {
@@ -377,6 +414,43 @@ function ptcgdm_get_admin_ui_content() {
                 setMessage('Request failed.');
               }
             });
+          });
+
+          productLinks.forEach((link) => {
+            link.addEventListener('click', (event) => {
+              event.stopPropagation();
+
+              const url = link.dataset.imageUrl;
+              if (!url) {
+                hidePopover();
+                return;
+              }
+
+              const pop = ensurePopover();
+              const img = pop.querySelector('img');
+              if (img) {
+                img.src = url;
+              }
+
+              const rect = link.getBoundingClientRect();
+              const top = rect.top + window.scrollY + rect.height + 6;
+              const left = rect.left + window.scrollX;
+
+              pop.style.top = top + 'px';
+              pop.style.left = left + 'px';
+              pop.style.display = 'block';
+            });
+          });
+
+          document.addEventListener('click', (event) => {
+            if (!productPopover) return;
+
+            const target = event.target;
+            if (target && (target.closest('.ptcgdm-product-popover') || target.closest('.ptcgdm-product-link'))) {
+              return;
+            }
+
+            hidePopover();
           });
         }
       })();
