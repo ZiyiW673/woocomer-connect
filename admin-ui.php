@@ -6,34 +6,134 @@
 if (!defined('ABSPATH')) exit;
 
 /**
+ * Strip headings/descriptions that shouldn't appear on the public Admin UI page.
+ *
+ * @param string $content
+ * @return string
+ */
+function ptcgdm_strip_admin_ui_headings($content) {
+  $content = preg_replace('~<h1[^>]*>\s*PTCG Deck \xe2\x80\x93 Card Inventory\s*</h1>~ui', '', $content);
+  $content = preg_replace('~<h1[^>]*>\s*One Piece TCG \xe2\x80\x93 Card Inventory\s*</h1>~ui', '', $content);
+  $content = preg_replace('~<p[^>]*class="description"[^>]*>\s*Maintain a single card inventory list using the local dataset\.\s*</p>~ui', '', $content);
+  $content = preg_replace('~<p[^>]*class="description"[^>]*>\s*Track One Piece TCG card inventory using the local dataset\.\s*</p>~ui', '', $content);
+
+  return $content;
+}
+
+/**
+ * Render a specific dataset inventory and return the sanitized markup.
+ *
+ * @param callable $callback
+ * @return string
+ */
+function ptcgdm_capture_admin_ui_panel($callback) {
+  if (!is_callable($callback)) {
+    return '<div class="wrap"><p>Inventory UI is unavailable.</p></div>';
+  }
+
+  ob_start();
+  call_user_func($callback);
+  $content = ob_get_clean();
+
+  return ptcgdm_strip_admin_ui_headings((string) $content);
+}
+
+/**
  * Build the inventory management markup for the public page/shortcode.
  *
  * @return string
  */
 function ptcgdm_get_admin_ui_content() {
-  if (function_exists('ptcgdm_render_inventory')) {
-    ob_start();
-    ptcgdm_render_inventory();
-    $content = ob_get_clean();
+  $sections = [
+    'pokemon'   => [
+      'label'   => 'Pokémon Inventory',
+      'content' => ptcgdm_capture_admin_ui_panel('ptcgdm_render_pokemon_inventory'),
+    ],
+    'one_piece' => [
+      'label'   => 'One Piece Inventory',
+      'content' => ptcgdm_capture_admin_ui_panel('ptcgdm_render_one_piece_inventory'),
+    ],
+  ];
 
-    // Strip the default inventory heading and description for the public Admin UI page only.
-    $content = preg_replace('~<h1[^>]*>\\s*PTCG Deck \xe2\x80\x93 Card Inventory\\s*</h1>~ui', '', $content);
-    $content = preg_replace('~<p[^>]*class="description"[^>]*>\\s*Maintain a single card inventory list using the local dataset\.\\s*</p>~ui', '', $content);
+  ob_start();
+  ?>
+  <div class="ptcgdm-admin-ui">
+    <style>
+      .ptcgdm-admin-ui .wrap > h1,
+      .ptcgdm-admin-ui .wrap > p.description { display: none; }
+      .ptcgdm-admin-ui__shell { display: grid; grid-template-columns: 240px 1fr; gap: 16px; align-items: flex-start; }
+      .ptcgdm-admin-ui__sidebar { background: #0f1218; border: 1px solid #1f2533; border-radius: 12px; padding: 12px; position: sticky; top: 16px; }
+      .ptcgdm-admin-ui__tab { width: 100%; text-align: left; border: 1px solid #1f2533; background: #111725; color: #cfd6e6; padding: 10px 12px; border-radius: 10px; cursor: pointer; margin-bottom: 8px; font-weight: 600; }
+      .ptcgdm-admin-ui__tab.is-active { background: linear-gradient(180deg, #28304a, #1b2034); border-color: #324061; color: #fff; }
+      .ptcgdm-admin-ui__tab:last-child { margin-bottom: 0; }
+      .ptcgdm-admin-ui__content { min-height: 360px; }
+      .ptcgdm-admin-ui__panel { display: none; }
+      .ptcgdm-admin-ui__panel.is-active { display: block; }
+      @media (max-width: 900px) {
+        .ptcgdm-admin-ui__shell { grid-template-columns: 1fr; }
+        .ptcgdm-admin-ui__sidebar { position: static; }
+        .ptcgdm-admin-ui__tab { display: inline-block; width: auto; margin-right: 8px; }
+      }
+    </style>
 
-    return $content;
-  }
+    <div class="ptcgdm-admin-ui__shell">
+      <aside class="ptcgdm-admin-ui__sidebar" aria-label="Inventory navigation">
+        <?php $first = true; foreach ($sections as $slug => $section) : ?>
+          <button type="button" class="ptcgdm-admin-ui__tab<?php echo $first ? ' is-active' : ''; ?>" data-panel="<?php echo esc_attr($slug); ?>">
+            <?php echo esc_html($section['label']); ?>
+          </button>
+        <?php $first = false; endforeach; ?>
+      </aside>
 
-  return '<div class="wrap"><h1>Inventory Management</h1><p>Inventory UI is unavailable.</p></div>';
+      <main class="ptcgdm-admin-ui__content">
+        <?php $first = true; foreach ($sections as $slug => $section) : ?>
+          <div id="ptcgdm-panel-<?php echo esc_attr($slug); ?>" class="ptcgdm-admin-ui__panel<?php echo $first ? ' is-active' : ''; ?>">
+            <?php echo $section['content']; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped ?>
+          </div>
+        <?php $first = false; endforeach; ?>
+      </main>
+    </div>
+
+    <script>
+      (function() {
+        const wrapper = document.currentScript.closest('.ptcgdm-admin-ui');
+        if (!wrapper) return;
+
+        const tabs = Array.from(wrapper.querySelectorAll('.ptcgdm-admin-ui__tab'));
+        const panels = Array.from(wrapper.querySelectorAll('.ptcgdm-admin-ui__panel'));
+
+        const activate = (slug) => {
+          tabs.forEach((btn) => {
+            const isActive = btn.dataset.panel === slug;
+            btn.classList.toggle('is-active', isActive);
+          });
+
+          panels.forEach((panel) => {
+            const isActive = panel.id === 'ptcgdm-panel-' + slug;
+            panel.classList.toggle('is-active', isActive);
+          });
+        };
+
+        tabs.forEach((btn) => {
+          btn.addEventListener('click', () => {
+            const slug = btn.dataset.panel;
+            if (!slug) return;
+            activate(slug);
+          });
+        });
+      })();
+    </script>
+  </div>
+  <?php
+
+  return ob_get_clean();
 }
 
 /**
  * Echo the inventory UI within a dedicated wrapper for the front-end page.
  */
 function ptcgdm_render_admin_ui_page() {
-  echo '<div class="ptcgdm-admin-ui">'
-    . '<style>.ptcgdm-admin-ui .wrap > h1{display:none;} .ptcgdm-admin-ui .wrap > p.description{display:none;}</style>'
-    . ptcgdm_get_admin_ui_content()
-    . '</div>';
+  echo ptcgdm_get_admin_ui_content();
 }
 
 /**
