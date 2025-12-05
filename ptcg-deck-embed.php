@@ -32,6 +32,10 @@ function ptcgdm_maybe_seed_admin_ui_page() {
     return;
   }
 
+  if (!is_user_logged_in() || !current_user_can('publish_pages')) {
+    return;
+  }
+
   ptcgdm_ensure_admin_ui_page_exists();
 }
 add_action('init', 'ptcgdm_maybe_seed_admin_ui_page');
