@@ -6,6 +6,15 @@
 if (!defined('ABSPATH')) exit;
 
 /**
+ * Determine whether the current visitor can access the Admin UI page.
+ *
+ * @return bool
+ */
+function ptcgdm_admin_ui_is_authorized() {
+  return is_user_logged_in() && current_user_can('manage_options');
+}
+
+/**
  * Strip headings/descriptions that shouldn't appear on the public Admin UI page.
  *
  * @param string $content
@@ -214,6 +223,10 @@ function ptcgdm_render_admin_orders_panel() {
  * @return string
  */
 function ptcgdm_get_admin_ui_content() {
+  if (!ptcgdm_admin_ui_is_authorized()) {
+    return '<div class="ptcgdm-admin-ui__notice">This page is only available to logged-in administrators.</div>';
+  }
+
   $sections = [
     'pokemon'   => [
       'label'   => 'Pokémon Inventory',
@@ -235,6 +248,7 @@ function ptcgdm_get_admin_ui_content() {
     <style>
       .ptcgdm-admin-ui .wrap > h1,
       .ptcgdm-admin-ui .wrap > p.description { display: none; }
+      .ptcgdm-admin-ui__notice { padding: 16px; border: 1px solid #1f2533; border-radius: 12px; background: #0f1218; color: #cfd6e6; }
       .ptcgdm-admin-ui__shell { display: grid; grid-template-columns: 240px 1fr; gap: 16px; align-items: flex-start; }
       .ptcgdm-admin-ui__sidebar { background: #0f1218; border: 1px solid #1f2533; border-radius: 12px; padding: 12px; position: sticky; top: 16px; display: flex; flex-direction: column; gap: 8px; }
       .ptcgdm-admin-ui__tab { width: 100%; text-align: left; border: 1px solid #1f2533; background: #111725; color: #cfd6e6; padding: 10px 12px; border-radius: 10px; cursor: pointer; font-weight: 600; }
@@ -553,6 +567,10 @@ add_action('init', 'ptcgdm_register_admin_ui_shortcode');
  */
 function ptcgdm_handle_update_order_status() {
   check_ajax_referer('ptcgdm_update_order_status', 'nonce');
+
+  if (!ptcgdm_admin_ui_is_authorized()) {
+    wp_send_json_error(__('You do not have permission to update orders.', 'woocommerce'), 403);
+  }
 
   $order_id = isset($_POST['order_id']) ? absint(wp_unslash($_POST['order_id'])) : 0;
   $status   = isset($_POST['status']) ? sanitize_key(wp_unslash($_POST['status'])) : '';
