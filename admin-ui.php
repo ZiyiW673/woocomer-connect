@@ -221,10 +221,10 @@ function ptcgdm_get_admin_ui_content() {
       .ptcgdm-admin-ui .wrap > h1,
       .ptcgdm-admin-ui .wrap > p.description { display: none; }
       .ptcgdm-admin-ui__shell { display: grid; grid-template-columns: 240px 1fr; gap: 16px; align-items: flex-start; }
-      .ptcgdm-admin-ui__sidebar { background: #0f1218; border: 1px solid #1f2533; border-radius: 12px; padding: 12px; position: sticky; top: 16px; }
-      .ptcgdm-admin-ui__tab { width: 100%; text-align: left; border: 1px solid #1f2533; background: #111725; color: #cfd6e6; padding: 10px 12px; border-radius: 10px; cursor: pointer; margin-bottom: 8px; font-weight: 600; }
+      .ptcgdm-admin-ui__sidebar { background: #0f1218; border: 1px solid #1f2533; border-radius: 12px; padding: 12px; position: sticky; top: 16px; display: flex; flex-direction: column; gap: 8px; }
+      .ptcgdm-admin-ui__tab { width: 100%; text-align: left; border: 1px solid #1f2533; background: #111725; color: #cfd6e6; padding: 10px 12px; border-radius: 10px; cursor: pointer; font-weight: 600; }
       .ptcgdm-admin-ui__tab.is-active { background: linear-gradient(180deg, #28304a, #1b2034); border-color: #324061; color: #fff; }
-      .ptcgdm-admin-ui__tab:last-child { margin-bottom: 0; }
+      .ptcgdm-admin-ui__return { margin-top: auto; background: #1b2034; border: 1px solid #324061; color: #fff; padding: 10px 12px; border-radius: 10px; cursor: pointer; font-weight: 700; text-align: center; }
       .ptcgdm-admin-ui__content { min-height: 360px; }
       .ptcgdm-admin-ui__panel { display: none; }
       .ptcgdm-admin-ui__panel.is-active { display: block; }
@@ -260,6 +260,7 @@ function ptcgdm_get_admin_ui_content() {
             <?php echo esc_html($section['label']); ?>
           </button>
         <?php $first = false; endforeach; ?>
+        <button type="button" class="ptcgdm-admin-ui__return" data-href="<?php echo esc_url(home_url('/')); ?>">&larr; Return to home</button>
       </aside>
 
       <main class="ptcgdm-admin-ui__content">
@@ -278,6 +279,7 @@ function ptcgdm_get_admin_ui_content() {
 
         const tabs = Array.from(wrapper.querySelectorAll('.ptcgdm-admin-ui__tab'));
         const panels = Array.from(wrapper.querySelectorAll('.ptcgdm-admin-ui__panel'));
+        const returnButton = wrapper.querySelector('.ptcgdm-admin-ui__return');
 
         const activate = (slug) => {
           tabs.forEach((btn) => {
@@ -298,6 +300,13 @@ function ptcgdm_get_admin_ui_content() {
             activate(slug);
           });
         });
+
+        if (returnButton) {
+          returnButton.addEventListener('click', () => {
+            const href = returnButton.dataset.href || '/';
+            window.location.href = href;
+          });
+        }
 
         const ordersWrapper = wrapper.querySelector('.ptcgdm-orders');
         if (ordersWrapper) {
