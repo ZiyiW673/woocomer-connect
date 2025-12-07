@@ -39,6 +39,21 @@ function ptcgdm_capture_admin_ui_panel($callback) {
 }
 
 /**
+ * Build a base64-encoded srcdoc string for iframe-isolated panels.
+ *
+ * @param string $content
+ * @return string Base64 HTML document
+ */
+function ptcgdm_admin_ui_frame_srcdoc($content) {
+  $base = esc_url(home_url('/'));
+  $html = '<!doctype html><html><head><base href="' . $base . '" />'
+    . '<style>body{margin:0;padding:16px;background:transparent;color:#cfd6e6;font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",sans-serif;} .wrap{padding:0;} a{color:#7ea6ff;}</style>'
+    . '</head><body>' . $content . '</body></html>';
+
+  return base64_encode($html);
+}
+
+/**
  * Render a simple WooCommerce orders list for the Admin UI page.
  */
 function ptcgdm_render_admin_orders_panel() {
@@ -202,11 +217,11 @@ function ptcgdm_get_admin_ui_content() {
   $sections = [
     'pokemon'   => [
       'label'   => 'Pokémon Inventory',
-      'content' => ptcgdm_capture_admin_ui_panel('ptcgdm_render_pokemon_inventory'),
+      'iframe_srcdoc' => ptcgdm_admin_ui_frame_srcdoc(ptcgdm_capture_admin_ui_panel('ptcgdm_render_pokemon_inventory')),
     ],
     'one_piece' => [
       'label'   => 'One Piece Inventory',
-      'content' => ptcgdm_capture_admin_ui_panel('ptcgdm_render_one_piece_inventory'),
+      'iframe_srcdoc' => ptcgdm_admin_ui_frame_srcdoc(ptcgdm_capture_admin_ui_panel('ptcgdm_render_one_piece_inventory')),
     ],
     'orders' => [
       'label'   => 'Orders',
@@ -226,6 +241,7 @@ function ptcgdm_get_admin_ui_content() {
       .ptcgdm-admin-ui__tab.is-active { background: linear-gradient(180deg, #28304a, #1b2034); border-color: #324061; color: #fff; }
       .ptcgdm-admin-ui__return { margin-top: auto; background: #1b2034; border: 1px solid #324061; color: #fff; padding: 10px 12px; border-radius: 10px; cursor: pointer; font-weight: 700; text-align: center; }
       .ptcgdm-admin-ui__content { min-height: 360px; }
+      .ptcgdm-admin-ui__frame { width: 100%; min-height: 900px; border: 1px solid #1f2533; border-radius: 12px; background: #0f1218; }
       .ptcgdm-admin-ui__panel { display: none; }
       .ptcgdm-admin-ui__panel.is-active { display: block; }
       .ptcgdm-orders__list { display: none; }
@@ -266,7 +282,11 @@ function ptcgdm_get_admin_ui_content() {
       <main class="ptcgdm-admin-ui__content">
         <?php $first = true; foreach ($sections as $slug => $section) : ?>
           <div id="ptcgdm-panel-<?php echo esc_attr($slug); ?>" class="ptcgdm-admin-ui__panel<?php echo $first ? ' is-active' : ''; ?>">
-            <?php echo $section['content']; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped ?>
+            <?php if (!empty($section['iframe_srcdoc'])) : ?>
+              <iframe class="ptcgdm-admin-ui__frame" loading="lazy" data-srcdoc="<?php echo esc_attr($section['iframe_srcdoc']); ?>" title="<?php echo esc_attr($section['label']); ?>"></iframe>
+            <?php else : ?>
+              <?php echo $section['content']; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped ?>
+            <?php endif; ?>
           </div>
         <?php $first = false; endforeach; ?>
       </main>
@@ -280,6 +300,26 @@ function ptcgdm_get_admin_ui_content() {
         const tabs = Array.from(wrapper.querySelectorAll('.ptcgdm-admin-ui__tab'));
         const panels = Array.from(wrapper.querySelectorAll('.ptcgdm-admin-ui__panel'));
         const returnButton = wrapper.querySelector('.ptcgdm-admin-ui__return');
+        const frames = Array.from(wrapper.querySelectorAll('.ptcgdm-admin-ui__frame'));
+
+        const decodeSrcdoc = (encoded) => {
+          if (!encoded) return '';
+          try {
+            return atob(encoded);
+          } catch (err) {
+            console.error('Admin UI iframe decode failed', err);
+            return '';
+          }
+        };
+
+        const loadFrame = (frame) => {
+          if (!frame || frame.dataset.loaded === '1') return;
+          const encoded = frame.dataset.srcdoc || '';
+          const html = decodeSrcdoc(encoded);
+          if (!html) return;
+          frame.srcdoc = html;
+          frame.dataset.loaded = '1';
+        };
 
         const activate = (slug) => {
           tabs.forEach((btn) => {
@@ -290,6 +330,10 @@ function ptcgdm_get_admin_ui_content() {
           panels.forEach((panel) => {
             const isActive = panel.id === 'ptcgdm-panel-' + slug;
             panel.classList.toggle('is-active', isActive);
+            if (isActive) {
+              const frame = panel.querySelector('.ptcgdm-admin-ui__frame');
+              loadFrame(frame);
+            }
           });
         };
 
@@ -300,6 +344,12 @@ function ptcgdm_get_admin_ui_content() {
             activate(slug);
           });
         });
+
+        const initialActive = panels.find((panel) => panel.classList.contains('is-active'));
+        if (initialActive) {
+          const frame = initialActive.querySelector('.ptcgdm-admin-ui__frame');
+          loadFrame(frame);
+        }
 
         if (returnButton) {
           returnButton.addEventListener('click', () => {
