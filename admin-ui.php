@@ -46,7 +46,7 @@ function ptcgdm_capture_admin_ui_panel($callback) {
  */
 function ptcgdm_admin_ui_frame_srcdoc($content) {
   $base = esc_url(home_url('/'));
-  $html = '<!doctype html><html><head><base href="' . $base . '" />'
+  $html = '<!doctype html><html><head><meta charset="utf-8" /><base href="' . $base . '" />'
     . '<style>body{margin:0;padding:16px;background:transparent;color:#cfd6e6;font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",sans-serif;} .wrap{padding:0;} a{color:#7ea6ff;}</style>'
     . '</head><body>' . $content . '</body></html>';
 
