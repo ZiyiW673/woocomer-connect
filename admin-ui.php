@@ -305,7 +305,9 @@ function ptcgdm_get_admin_ui_content() {
         const decodeSrcdoc = (encoded) => {
           if (!encoded) return '';
           try {
-            return atob(encoded);
+            const binary = atob(encoded);
+            const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
+            return new TextDecoder('utf-8').decode(bytes);
           } catch (err) {
             console.error('Admin UI iframe decode failed', err);
             return '';
