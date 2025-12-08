@@ -439,6 +439,20 @@ function ptcgdm_get_admin_ui_content() {
           const ajaxUrl = ordersWrapper.dataset.ajaxUrl;
           const nonce = ordersWrapper.dataset.nonce;
 
+          const parseOrderResponse = async (response) => {
+            try {
+              const text = await response.text();
+              if (!text) return { success: false, data: 'Empty response' };
+              try {
+                return JSON.parse(text);
+              } catch (err) {
+                return { success: false, data: text };
+              }
+            } catch (err) {
+              return { success: false, data: 'Unexpected response format' };
+            }
+          };
+
           const updateStatusLabel = (orderId, label) => {
             const row = ordersWrapper.querySelector('#ptcgdm-order-row-' + orderId + ' .ptcgdm-order-status');
             if (row && label) {
@@ -478,8 +492,8 @@ function ptcgdm_get_admin_ui_content() {
                   }),
                 });
 
-                const data = await response.json();
-                if (data && data.success && data.data && data.data.label) {
+                const data = await parseOrderResponse(response);
+                if (response.ok && data && data.success && data.data && data.data.label) {
                   updateStatusLabel(orderId, data.data.label);
                   setMessage('Updated.');
                 } else {

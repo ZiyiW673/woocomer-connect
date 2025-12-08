@@ -1106,6 +1106,35 @@ function ptcgdm_render_builder(array $config = []){
         syncProgress: document.getElementById('syncProgress'),
         syncProgressText: document.getElementById('syncProgressText')
       };
+
+      async function safeParseJsonResponse(response){
+        const fallback = { success: false, data: 'Unexpected response format.' };
+        try {
+          const text = await response.text();
+          if (!text) {
+            return fallback;
+          }
+          try {
+            return JSON.parse(text);
+          } catch (parseError) {
+            return { success: false, data: text };
+          }
+        } catch (e) {
+          return fallback;
+        }
+      }
+
+      function resolveResponseError(result, response){
+        const data = result && typeof result.data !== 'undefined' ? result.data : '';
+        if (typeof data === 'string' && data.trim()) {
+          return data;
+        }
+        if (response && response.ok === false) {
+          const status = response.status || 'error';
+          return `HTTP ${status}`;
+        }
+        return 'Unknown error';
+      }
       const deck=[]; const deckMap=new Map();
       let deckErrorMessage='';
       let inventoryBufferLimitAlerted=false;
@@ -3210,12 +3239,9 @@ function ptcgdm_render_builder(array $config = []){
         payload.append('datasetKey', DATASET_KEY);
         try {
           const response = await fetch(AJAX_URL, { method: 'POST', body: payload });
-          if(!response.ok){
-            throw new Error(`HTTP ${response.status}`);
-          }
-          const result = await response.json();
-          if(!result?.success){
-            throw new Error(result?.data || 'Unknown error');
+          const result = await safeParseJsonResponse(response);
+          if(!response.ok || !result?.success){
+            throw new Error(resolveResponseError(result, response));
           }
           const data = result.data || {};
           removeInventoryEntryLocal(cardId);
@@ -4040,8 +4066,8 @@ function ptcgdm_render_builder(array $config = []){
         body.append('content', deckJsonCache);
         try{
           const r = await fetch(AJAX_URL, { method:'POST', body });
-          const j = await r.json();
-          if (!j.success) throw new Error(j.data || 'Unknown error');
+          const j = await safeParseJsonResponse(r);
+          if (!r.ok || !j?.success) throw new Error(resolveResponseError(j, r));
           const displayName = getDeckNameValue();
           if (!IS_INVENTORY) {
             ensureSavedDeckOption(j.data?.url || '', filename, displayName);
@@ -4124,12 +4150,11 @@ function ptcgdm_render_builder(array $config = []){
           payload.append('nonce', nonce);
           payload.append('datasetKey', DATASET_KEY);
           const response = await fetch(AJAX_URL, { method: 'POST', body: payload });
-          if (!response.ok) {
-            throw new Error(`HTTP ${response.status}`);
-          }
-          const result = await response.json();
-          if (!result?.success) {
-            throw new Error(getManualSyncErrorMessage(result?.data, 'Unknown error'));
+          const result = await safeParseJsonResponse(response);
+          if (!response.ok || !result?.success) {
+            const rawError = getManualSyncErrorMessage(result?.data, 'Unknown error');
+            const fallback = resolveResponseError(result, response);
+            throw new Error(rawError || fallback);
           }
           const data = result.data || {};
           const status = normalizeManualSyncStatus(data.status);
@@ -4385,12 +4410,11 @@ function ptcgdm_render_builder(array $config = []){
         }
         try {
           const response = await fetch(AJAX_URL, { method: 'POST', body });
-          if (!response.ok) {
-            throw new Error(`HTTP ${response.status}`);
-          }
-          const result = await response.json();
-          if (!result?.success) {
-            throw new Error(getManualSyncErrorMessage(result?.data, 'Unknown error'));
+          const result = await safeParseJsonResponse(response);
+          if (!response.ok || !result?.success) {
+            const rawError = getManualSyncErrorMessage(result?.data, 'Unknown error');
+            const fallback = resolveResponseError(result, response);
+            throw new Error(rawError || fallback);
           }
           const status = normalizeManualSyncStatus(result?.data?.status || {});
           if (status.runId && manualSyncRunId && status.runId !== manualSyncRunId) {
