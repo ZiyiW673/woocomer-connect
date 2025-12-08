@@ -1124,10 +1124,26 @@ function ptcgdm_render_builder(array $config = []){
         }
       }
 
+      function formatResponseText(text){
+        if (typeof text !== 'string') return '';
+        const trimmed = text.trim();
+        if (!trimmed) return '';
+        const maybeHtml = /<\s*!(doctype|DOCTYPE)\b/i.test(trimmed) || /<\s*html\b/i.test(trimmed) || /<\s*body\b/i.test(trimmed);
+        if (maybeHtml) {
+          const titleMatch = trimmed.match(/<title[^>]*>([^<]*)<\/title>/i);
+          if (titleMatch && titleMatch[1]) {
+            return `Unexpected HTML response: ${titleMatch[1].trim()}`;
+          }
+          return 'Unexpected HTML response from server.';
+        }
+        return trimmed;
+      }
+
       function resolveResponseError(result, response){
         const data = result && typeof result.data !== 'undefined' ? result.data : '';
-        if (typeof data === 'string' && data.trim()) {
-          return data;
+        const formatted = formatResponseText(data);
+        if (formatted) {
+          return formatted;
         }
         if (response && response.ok === false) {
           const status = response.status || 'error';
