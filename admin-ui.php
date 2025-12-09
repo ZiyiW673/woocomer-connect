@@ -691,6 +691,7 @@ function ptcgdm_get_admin_ui_content() {
           const fetchMeta = async () => {
             try {
               const res = await fetch(`${apiBase}/encryption-meta`, { credentials: 'include' });
+              if (!res.ok) throw new Error('Metadata request failed');
               metadata = await res.json();
             } catch (err) {
               metadata = { status: 'unencrypted' };
@@ -704,6 +705,19 @@ function ptcgdm_get_admin_ui_content() {
               return metadata;
             }
             return fetchMeta();
+          };
+
+          const requireEncryptedMeta = async (section) => {
+            const latestMeta = await ensureMetadata();
+            if (!latestMeta || latestMeta.status !== 'encrypted_v1') {
+              setStatus(section, 'Encryption not set up yet.', 'error');
+              return null;
+            }
+            if (!latestMeta.verifier) {
+              setStatus(section, 'Encryption metadata is incomplete.', 'error');
+              return null;
+            }
+            return latestMeta;
           };
 
           const saveMeta = async (body) => {
@@ -797,11 +811,8 @@ function ptcgdm_get_admin_ui_content() {
           };
 
           const unlockWithPassword = async () => {
-            const latestMeta = await ensureMetadata();
-            if (!latestMeta || latestMeta.status !== 'encrypted_v1') {
-              setStatus('password', 'Encryption not set up yet.', 'error');
-              return;
-            }
+            const latestMeta = await requireEncryptedMeta('password');
+            if (!latestMeta) return;
             const password = (unlockPasswordInput.value || '').trim();
             if (!password) {
               setStatus('password', 'Password is required.', 'error');
@@ -809,9 +820,6 @@ function ptcgdm_get_admin_ui_content() {
             }
             try {
               const { pw_salt, pw_iterations, master_wrapped_pw } = latestMeta;
-              if (!pw_salt || !pw_iterations || !master_wrapped_pw) {
-                throw new Error('Encryption metadata is incomplete.');
-              }
               const pwKey = await deriveKey(password, pw_salt, pw_iterations);
               const rawMaster = await decryptWithKey(pwKey, master_wrapped_pw);
               masterKey = await crypto.subtle.importKey('raw', rawMaster, { name: 'AES-GCM' }, true, ['encrypt', 'decrypt']);
@@ -835,11 +843,8 @@ function ptcgdm_get_admin_ui_content() {
           };
 
           const unlockWithPin = async () => {
-            const latestMeta = await ensureMetadata();
-            if (!latestMeta || latestMeta.status !== 'encrypted_v1') {
-              setStatus('pin', 'Encryption not set up yet.', 'error');
-              return;
-            }
+            const latestMeta = await requireEncryptedMeta('pin');
+            if (!latestMeta) return;
 
             const blobRaw = window.localStorage.getItem('ptcgdm_zk_master_pin_blob');
             if (!blobRaw) {
@@ -884,7 +889,8 @@ function ptcgdm_get_admin_ui_content() {
 
           const handleRecoveryUpload = async (file) => {
             try {
-              await ensureMetadata();
+              const latestMeta = await requireEncryptedMeta('recovery');
+              if (!latestMeta) return;
               const text = await file.text();
               const data = JSON.parse(text);
               if (data.type !== 'ptcgdm_recovery_key_v1' || !data.master_b64) {
@@ -907,7 +913,8 @@ function ptcgdm_get_admin_ui_content() {
               return;
             }
 
-            await ensureMetadata();
+            const latestMeta = await requireEncryptedMeta('recovery');
+            if (!latestMeta) return;
 
             const password = (recoveryPasswordInput && recoveryPasswordInput.value || '').trim();
             const confirm = (recoveryConfirmInput && recoveryConfirmInput.value || '').trim();
@@ -928,9 +935,10 @@ function ptcgdm_get_admin_ui_content() {
               const pwKey = await deriveKey(password, saltPw, pwIterations);
               const rawMaster = await crypto.subtle.exportKey('raw', masterKey);
               const masterWrappedPw = await encryptWithKey(pwKey, rawMaster);
-              const verifierBlob = metadata && metadata.verifier ? metadata.verifier : await encryptWithKey(masterKey, new TextEncoder().encode(JSON.stringify({ magic: 'SHOP_SEC_V1' })));
+              const verifierBlob = latestMeta && latestMeta.verifier ? latestMeta.verifier : await encryptWithKey(masterKey, new TextEncoder().encode(JSON.stringify({ magic: 'SHOP_SEC_V1' })));
 
               await saveMeta({ status: 'encrypted_v1', pw_salt: saltPw, pw_iterations: pwIterations, verifier: verifierBlob, master_wrapped_pw: masterWrappedPw });
+              window.localStorage.removeItem('ptcgdm_zk_master_pin_blob');
               setStatus('recovery', 'Password reset. You can now unlock with the new password.', 'success');
               toggleSections();
             } catch (err) {
