@@ -762,6 +762,16 @@ function ptcgdm_get_admin_ui_content() {
                 await fetchMeta();
                 throw new Error('Inventory already appears encrypted or access was denied. Refresh and unlock instead.');
               }
+              if (res.status === 401) {
+                let detail = '';
+                try {
+                  detail = await res.text();
+                } catch (innerErr) {
+                  detail = '';
+                }
+                const suffix = detail ? `: ${detail}` : '';
+                throw new Error(`Could not read existing inventory for ${dataset}; not authorized${suffix ? ` (${suffix})` : ''}`);
+              }
               if (!res.ok) {
                 let detail = '';
                 try {
