@@ -4799,6 +4799,15 @@ add_action('wp_ajax_ptcgdm_save_inventory', function(){
       $syncStatus = ptcgdm_get_inventory_sync_status($dataset_key);
     } elseif (is_wp_error($syncQueued)) {
       $syncError = $syncQueued->get_error_message();
+    } else {
+      $syncResult = ptcgdm_run_inventory_sync_now(['dataset' => $dataset_key]);
+      if ($syncResult === true) {
+        $syncStatus = ptcgdm_get_inventory_sync_status($dataset_key);
+      } elseif (is_wp_error($syncResult)) {
+        $syncError = $syncResult->get_error_message();
+      } else {
+        $syncError = __('Inventory sync could not be started.', 'ptcgdm');
+      }
     }
   } else {
     $syncResult = ptcgdm_run_inventory_sync_now(['dataset' => $dataset_key]);
@@ -4828,6 +4837,9 @@ add_action('wp_ajax_ptcgdm_save_inventory', function(){
   }
   if ($syncResult === true) {
     $response['synced'] = true;
+  }
+  if ($syncError !== '' && !$syncQueued && $syncResult !== true && $prefer_async_sync) {
+    wp_send_json_error($syncError);
   }
   wp_send_json_success($response);
 });
