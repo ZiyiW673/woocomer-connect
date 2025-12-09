@@ -296,6 +296,12 @@ function ptcgdm_get_inventory_path_for_dataset($dataset_key = '') {
   return $dir . ptcgdm_get_inventory_filename_for_dataset($dataset_key);
 }
 
+function ptcgdm_get_encrypted_inventory_path_for_dataset($dataset_key = '') {
+  $dir = trailingslashit(ptcgdm_get_inventory_dir());
+  $base = pathinfo(ptcgdm_get_inventory_filename_for_dataset($dataset_key), PATHINFO_FILENAME);
+  return $dir . $base . '.enc.json';
+}
+
 function ptcgdm_get_inventory_url_for_dataset($dataset_key = '') {
   $url = trailingslashit(ptcgdm_get_inventory_url());
   return $url . rawurlencode(ptcgdm_get_inventory_filename_for_dataset($dataset_key));
@@ -9277,12 +9283,8 @@ function ptcgdm_register_encryption_routes() {
   register_rest_route('ptcgdm/v1', '/encrypted-inventory', [
     'methods'  => WP_REST_Server::READABLE,
     'callback' => function (WP_REST_Request $request) {
-      $file = sanitize_file_name($request->get_param('file') ?: 'inventory.enc');
-      if ($file === '') {
-        return new WP_Error('invalid_file', 'Invalid file name.', ['status' => 400]);
-      }
-
-      $path = trailingslashit(ptcgdm_get_inventory_dir()) . $file;
+      $dataset = ptcgdm_normalize_inventory_dataset_key($request->get_param('dataset'));
+      $path    = ptcgdm_get_encrypted_inventory_path_for_dataset($dataset);
       if (!file_exists($path)) {
         return new WP_Error('not_found', 'Encrypted payload not found.', ['status' => 404]);
       }
@@ -9294,8 +9296,8 @@ function ptcgdm_register_encryption_routes() {
         return new WP_Error('corrupt_blob', 'Stored payload is invalid.', ['status' => 500]);
       }
       return [
-        'file' => $file,
-        'blob' => $blob,
+        'dataset' => $dataset,
+        'blob'    => $blob,
       ];
     },
     'permission_callback' => function () {
@@ -9311,23 +9313,29 @@ function ptcgdm_register_encryption_routes() {
         return new WP_Error('invalid_body', 'Invalid payload.', ['status' => 400]);
       }
 
-      $file = isset($body['file']) ? sanitize_file_name((string) $body['file']) : 'inventory.enc';
-      $blob = isset($body['blob']) ? ptcgdm_validate_encryption_blob($body['blob']) : null;
-      if ($file === '' || !$blob) {
-        return new WP_Error('invalid_payload', 'File or blob missing.', ['status' => 400]);
+      $dataset = ptcgdm_normalize_inventory_dataset_key($body['dataset'] ?? '');
+      $blob    = isset($body['blob']) ? ptcgdm_validate_encryption_blob($body['blob']) : null;
+      if (!$blob) {
+        return new WP_Error('invalid_payload', 'Dataset or blob missing.', ['status' => 400]);
       }
 
       $dir = ptcgdm_get_inventory_dir();
       if (!file_exists($dir)) {
         wp_mkdir_p($dir);
       }
-      $path = trailingslashit($dir) . $file;
+
+      $path = ptcgdm_get_encrypted_inventory_path_for_dataset($dataset);
       $written = file_put_contents($path, wp_json_encode($blob));
       if ($written === false) {
         return new WP_Error('write_failed', 'Unable to persist encrypted payload.', ['status' => 500]);
       }
 
-      return [ 'file' => $file ];
+      $plaintext_path = ptcgdm_get_inventory_path_for_dataset($dataset);
+      if (file_exists($plaintext_path)) {
+        @unlink($plaintext_path);
+      }
+
+      return [ 'dataset' => $dataset ];
     },
     'permission_callback' => function () {
       return ptcgdm_admin_ui_is_authorized();

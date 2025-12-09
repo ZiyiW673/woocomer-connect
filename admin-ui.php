@@ -615,6 +615,7 @@ function ptcgdm_get_admin_ui_content() {
         const securityRoot = wrapper.querySelector('[data-security-root]');
         if (securityRoot) {
           const apiBase = `${window.location.origin.replace(/\/$/, '')}/wp-json/ptcgdm/v1`;
+          const datasetKeys = <?php echo wp_json_encode(array_keys(ptcgdm_get_dataset_definitions())); ?>;
           const sectionEls = Array.from(securityRoot.querySelectorAll('.ptcgdm-security__section'));
           const passwordInput = securityRoot.querySelector('#ptcgdm-security-password');
           const passwordConfirmInput = securityRoot.querySelector('#ptcgdm-security-password-confirm');
@@ -709,26 +710,38 @@ function ptcgdm_get_admin_ui_content() {
             toggleSections();
           };
 
-          const saveEncryptedInventory = async (blob) => {
+          const saveEncryptedInventory = async (dataset, blob) => {
             const res = await fetch(`${apiBase}/encrypted-inventory`, {
               method: 'POST',
               credentials: 'include',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ file: 'inventory.enc', blob }),
+              body: JSON.stringify({ dataset, blob }),
             });
-            if (!res.ok) throw new Error('Failed to store encrypted inventory');
+            if (!res.ok) throw new Error(`Failed to store encrypted inventory for ${dataset}`);
           };
 
-          const loadPlaintextInventory = async () => {
-            const res = await fetch(`${apiBase}/plaintext-inventory`, { credentials: 'include' });
-            if (!res.ok) {
-              throw new Error('Could not read existing inventory for encryption.');
+          const loadPlaintextInventories = async () => {
+            const results = {};
+            for (const dataset of datasetKeys) {
+              const res = await fetch(`${apiBase}/plaintext-inventory?dataset=${encodeURIComponent(dataset)}`, { credentials: 'include' });
+              if (res.status === 404) {
+                continue;
+              }
+              if (!res.ok) {
+                throw new Error(`Could not read existing inventory for ${dataset}.`);
+              }
+              const payload = await res.json();
+              if (!payload || typeof payload.data !== 'string') {
+                throw new Error(`Unexpected inventory payload for ${dataset}.`);
+              }
+              results[dataset] = payload.data;
             }
-            const payload = await res.json();
-            if (!payload || typeof payload.data !== 'string') {
-              throw new Error('Unexpected inventory payload.');
+
+            if (Object.keys(results).length === 0) {
+              throw new Error('No inventory files found to encrypt.');
             }
-            return payload.data;
+
+            return results;
           };
 
           const loadVerifier = async (key) => {
@@ -761,10 +774,11 @@ function ptcgdm_get_admin_ui_content() {
               const masterWrappedPw = await encryptWithKey(pwKey, rawMaster);
               const verifierBlob = await encryptWithKey(master, new TextEncoder().encode(JSON.stringify({ magic: 'SHOP_SEC_V1' })));
 
-              const plaintext = await loadPlaintextInventory();
-              const encrypted = await encryptWithKey(master, new TextEncoder().encode(plaintext));
-
-              await saveEncryptedInventory(encrypted);
+              const plaintextMap = await loadPlaintextInventories();
+              for (const dataset of Object.keys(plaintextMap)) {
+                const encrypted = await encryptWithKey(master, new TextEncoder().encode(plaintextMap[dataset]));
+                await saveEncryptedInventory(dataset, encrypted);
+              }
               await saveMeta({ status: 'encrypted_v1', pw_salt: saltPw, pw_iterations: pwIterations, verifier: verifierBlob, master_wrapped_pw: masterWrappedPw });
               setStatus('initial', 'Encryption completed. You can now unlock with your password.', 'success');
               toggleSections();
