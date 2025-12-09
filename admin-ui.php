@@ -696,6 +696,14 @@ function ptcgdm_get_admin_ui_content() {
               metadata = { status: 'unencrypted' };
             }
             toggleSections();
+            return metadata;
+          };
+
+          const ensureMetadata = async () => {
+            if (metadata && typeof metadata === 'object') {
+              return metadata;
+            }
+            return fetchMeta();
           };
 
           const saveMeta = async (body) => {
@@ -789,7 +797,8 @@ function ptcgdm_get_admin_ui_content() {
           };
 
           const unlockWithPassword = async () => {
-            if (!metadata || metadata.status !== 'encrypted_v1') {
+            const latestMeta = await ensureMetadata();
+            if (!latestMeta || latestMeta.status !== 'encrypted_v1') {
               setStatus('password', 'Encryption not set up yet.', 'error');
               return;
             }
@@ -799,8 +808,12 @@ function ptcgdm_get_admin_ui_content() {
               return;
             }
             try {
-              const pwKey = await deriveKey(password, metadata.pw_salt, metadata.pw_iterations);
-              const rawMaster = await decryptWithKey(pwKey, metadata.master_wrapped_pw);
+              const { pw_salt, pw_iterations, master_wrapped_pw } = latestMeta;
+              if (!pw_salt || !pw_iterations || !master_wrapped_pw) {
+                throw new Error('Encryption metadata is incomplete.');
+              }
+              const pwKey = await deriveKey(password, pw_salt, pw_iterations);
+              const rawMaster = await decryptWithKey(pwKey, master_wrapped_pw);
               masterKey = await crypto.subtle.importKey('raw', rawMaster, { name: 'AES-GCM' }, true, ['encrypt', 'decrypt']);
               await loadVerifier(masterKey);
 
@@ -822,6 +835,12 @@ function ptcgdm_get_admin_ui_content() {
           };
 
           const unlockWithPin = async () => {
+            const latestMeta = await ensureMetadata();
+            if (!latestMeta || latestMeta.status !== 'encrypted_v1') {
+              setStatus('pin', 'Encryption not set up yet.', 'error');
+              return;
+            }
+
             const blobRaw = window.localStorage.getItem('ptcgdm_zk_master_pin_blob');
             if (!blobRaw) {
               setStatus('pin', 'No PIN is stored on this device.', 'error');
@@ -865,6 +884,7 @@ function ptcgdm_get_admin_ui_content() {
 
           const handleRecoveryUpload = async (file) => {
             try {
+              await ensureMetadata();
               const text = await file.text();
               const data = JSON.parse(text);
               if (data.type !== 'ptcgdm_recovery_key_v1' || !data.master_b64) {
@@ -886,6 +906,8 @@ function ptcgdm_get_admin_ui_content() {
               setStatus('recovery', 'Unlock with your password, PIN, or recovery key first.', 'error');
               return;
             }
+
+            await ensureMetadata();
 
             const password = (recoveryPasswordInput && recoveryPasswordInput.value || '').trim();
             const confirm = (recoveryConfirmInput && recoveryConfirmInput.value || '').trim();
