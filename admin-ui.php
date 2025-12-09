@@ -639,6 +639,39 @@ function ptcgdm_get_admin_ui_content() {
 
           let metadata = null;
           let masterKey = null;
+          const zkBridge = window.ptcgdmZkBridge || { listeners: [] };
+          zkBridge.getMetadata = () => metadata;
+          zkBridge.getMasterKeyBytes = async () => {
+            if (!masterKey) return null;
+            try {
+              const exported = await crypto.subtle.exportKey('raw', masterKey);
+              return new Uint8Array(exported);
+            } catch (err) {
+              return null;
+            }
+          };
+          zkBridge.onMasterKey = (callback) => {
+            if (typeof callback === 'function') {
+              zkBridge.listeners.push(callback);
+            }
+          };
+          const emitBridgeUpdate = () => {
+            zkBridge.metadata = metadata;
+            (zkBridge.listeners || []).forEach((fn) => {
+              try {
+                fn({ hasMasterKey: !!masterKey, metadata });
+              } catch (err) {
+                // ignore listener errors
+              }
+            });
+          };
+          window.ptcgdmZkBridge = zkBridge;
+
+          const setMasterKey = (key) => {
+            masterKey = key;
+            emitBridgeUpdate();
+            return masterKey;
+          };
 
           const setStatus = (section, message, type = 'info') => {
             statuses.forEach((el) => {
@@ -714,6 +747,7 @@ function ptcgdm_get_admin_ui_content() {
               metadata = { status: 'unencrypted' };
             }
             toggleSections();
+            emitBridgeUpdate();
             return metadata;
           };
 
@@ -747,6 +781,7 @@ function ptcgdm_get_admin_ui_content() {
             if (!res.ok) throw new Error('Failed to save metadata');
             metadata = await res.json();
             toggleSections();
+            emitBridgeUpdate();
           };
 
           const saveEncryptedInventory = async (dataset, blob) => {
@@ -852,7 +887,7 @@ function ptcgdm_get_admin_ui_content() {
               const pwIterations = 200000;
               const pwKey = await deriveKey(password, saltPw, pwIterations);
               const master = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, true, ['encrypt', 'decrypt']);
-              masterKey = master;
+              setMasterKey(master);
               const rawMaster = await crypto.subtle.exportKey('raw', master);
               const masterWrappedPw = await encryptWithKey(pwKey, rawMaster);
               const verifierBlob = await encryptWithKey(master, new TextEncoder().encode(JSON.stringify({ magic: 'SHOP_SEC_V1' })));
@@ -869,7 +904,7 @@ function ptcgdm_get_admin_ui_content() {
               setStatus('initial', 'Encryption completed. You can now unlock with your password.', 'success');
               toggleSections();
             } catch (err) {
-              masterKey = null;
+              setMasterKey(null);
               setStatus('initial', err && err.message ? err.message : 'Encryption failed.', 'error');
             }
           };
@@ -886,7 +921,8 @@ function ptcgdm_get_admin_ui_content() {
               const { pw_salt, pw_iterations, master_wrapped_pw } = latestMeta;
               const pwKey = await deriveKey(password, pw_salt, pw_iterations);
               const rawMaster = await decryptWithKey(pwKey, master_wrapped_pw);
-              masterKey = await crypto.subtle.importKey('raw', rawMaster, { name: 'AES-GCM' }, true, ['encrypt', 'decrypt']);
+              const imported = await crypto.subtle.importKey('raw', rawMaster, { name: 'AES-GCM' }, true, ['encrypt', 'decrypt']);
+              setMasterKey(imported);
               await loadVerifier(masterKey);
 
               if (rememberCheckbox.checked) {
@@ -901,7 +937,7 @@ function ptcgdm_get_admin_ui_content() {
               setStatus('password', 'Unlocked.', 'success');
               toggleSections();
             } catch (err) {
-              masterKey = null;
+              setMasterKey(null);
               setStatus('password', err && err.message ? err.message : 'Failed to unlock.', 'error');
             }
           };
@@ -924,12 +960,13 @@ function ptcgdm_get_admin_ui_content() {
               const pinData = JSON.parse(blobRaw);
               const pinKey = await deriveKey(pinValue, pinData.salt_pin, 50000);
               const rawMaster = await decryptWithKey(pinKey, pinData.wrapped_master_pin);
-              masterKey = await crypto.subtle.importKey('raw', rawMaster, { name: 'AES-GCM' }, true, ['encrypt', 'decrypt']);
+              const imported = await crypto.subtle.importKey('raw', rawMaster, { name: 'AES-GCM' }, true, ['encrypt', 'decrypt']);
+              setMasterKey(imported);
               await loadVerifier(masterKey);
               setStatus('pin', 'Unlocked with PIN.', 'success');
               toggleSections();
             } catch (err) {
-              masterKey = null;
+              setMasterKey(null);
               setStatus('pin', 'Wrong PIN or local key is corrupted.', 'error');
             }
           };
@@ -963,7 +1000,7 @@ function ptcgdm_get_admin_ui_content() {
               const rawMaster = b64ToBytes(data.master_b64);
               const recovered = await crypto.subtle.importKey('raw', rawMaster, { name: 'AES-GCM' }, true, ['encrypt', 'decrypt']);
               await loadVerifier(recovered);
-              masterKey = recovered;
+              setMasterKey(recovered);
               setStatus('recovery', 'Recovery key accepted. Set a new password to continue.', 'success');
               toggleSections();
             } catch (err) {

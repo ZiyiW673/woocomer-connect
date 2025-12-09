@@ -938,6 +938,9 @@ function ptcgdm_render_builder(array $config = []){
       const DATA_BASE = '<?php echo $data_base_url; ?>'; // plugin asset URL
       const SAVE_NONCE = '<?php echo esc_js($nonce); ?>';
       const AJAX_URL = '<?php echo admin_url('admin-ajax.php'); ?>';
+      const API_BASE = `${window.location.origin.replace(/\/$/, '')}/wp-json/ptcgdm/v1`;
+      const REST_NONCE = '<?php echo esc_js(wp_create_nonce('wp_rest')); ?>';
+      const withRestNonce = (headers = {}) => REST_NONCE ? { ...headers, 'X-WP-Nonce': REST_NONCE } : headers;
       const SAVE_CONFIG = Object.assign({
         saveAction: 'ptcgdm_save_inventory',
         defaultBasename: 'card-inventory',
@@ -976,6 +979,10 @@ function ptcgdm_render_builder(array $config = []){
       const DATASET_KEY = typeof SAVE_CONFIG.datasetKey === 'string' ? SAVE_CONFIG.datasetKey : 'pokemon';
       const DATASET_LABEL = typeof SAVE_CONFIG.datasetLabel === 'string' ? SAVE_CONFIG.datasetLabel.trim() : '';
       const IS_ONE_PIECE = DATASET_KEY === 'one_piece';
+      const zkBridge = (window.parent && window.parent.ptcgdmZkBridge) ? window.parent.ptcgdmZkBridge : null;
+      let encryptionMeta = null;
+      let encryptedInventoryLoaded = false;
+      let encryptedLoadInFlight = false;
       const RAW_SET_LABELS = (SAVE_CONFIG.setLabels && typeof SAVE_CONFIG.setLabels === 'object' && !Array.isArray(SAVE_CONFIG.setLabels)) ? SAVE_CONFIG.setLabels : {};
       const SET_LABELS = {};
       Object.entries(RAW_SET_LABELS).forEach(([key, value]) => {
@@ -1696,10 +1703,7 @@ function ptcgdm_render_builder(array $config = []){
         updateLoadDeckButton(true);
         updateJSON();
         updateBulkAddState();
-        if (SAVE_CONFIG.autoLoadUrl) {
-          const loadOptions = IS_INVENTORY ? { updateInventory: true } : undefined;
-          loadDeckFromUrl(SAVE_CONFIG.autoLoadUrl, loadOptions);
-        }
+        autoLoadInventory();
       });
 
       async function populateSetDropdown(){
@@ -4531,6 +4535,123 @@ function ptcgdm_render_builder(array $config = []){
         if (!els.deckLoadStatus) return;
         els.deckLoadStatus.textContent = message;
         els.deckLoadStatus.style.color = isError ? '#f28b82' : '';
+      }
+      function b64ToBytesSafe(b64){
+        if (!b64) return new Uint8Array();
+        const binary = atob(b64);
+        const len = binary.length;
+        const bytes = new Uint8Array(len);
+        for (let i = 0; i < len; i++) {
+          bytes[i] = binary.charCodeAt(i);
+        }
+        return bytes;
+      }
+      async function decryptBlobWithKey(key, blob){
+        if (!blob || !blob.iv || !blob.data) {
+          throw new Error('Encrypted payload missing.');
+        }
+        const iv = b64ToBytesSafe(blob.iv);
+        const data = b64ToBytesSafe(blob.data);
+        return crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, data);
+      }
+      async function fetchEncryptionMetaCached(){
+        if (encryptionMeta) return encryptionMeta;
+        if (zkBridge && typeof zkBridge.getMetadata === 'function') {
+          const bridgeMeta = zkBridge.getMetadata();
+          if (bridgeMeta) {
+            encryptionMeta = bridgeMeta;
+            return encryptionMeta;
+          }
+        }
+        try {
+          const res = await fetch(`${API_BASE}/encryption-meta`, { credentials: 'include', headers: withRestNonce() });
+          if (res.ok) {
+            encryptionMeta = await res.json();
+          }
+        } catch (err) {
+          // ignore
+        }
+        return encryptionMeta;
+      }
+      async function getMasterKeyFromBridge(){
+        if (!zkBridge || typeof zkBridge.getMasterKeyBytes !== 'function') return null;
+        const raw = await zkBridge.getMasterKeyBytes();
+        if (!raw || !raw.byteLength) return null;
+        return crypto.subtle.importKey('raw', raw, { name: 'AES-GCM' }, true, ['decrypt']);
+      }
+      async function loadEncryptedInventory(masterKey){
+        const res = await fetch(`${API_BASE}/encrypted-inventory?dataset=${encodeURIComponent(DATASET_KEY)}`, {
+          credentials: 'include',
+          headers: withRestNonce(),
+        });
+        if (res.status === 404) {
+          setInventoryData([]);
+          setLoadStatus('No saved inventory found yet.');
+          encryptedInventoryLoaded = true;
+          return true;
+        }
+        if (!res.ok) {
+          setLoadStatus('Failed to load encrypted inventory.', true);
+          return true;
+        }
+        const payload = await res.json();
+        if (!payload || !payload.blob) {
+          throw new Error('Encrypted inventory blob was missing.');
+        }
+        const plaintext = await decryptBlobWithKey(masterKey, payload.blob);
+        const text = new TextDecoder().decode(plaintext);
+        const data = text ? JSON.parse(text) : {};
+        applyDeckData(data, { updateInventory: true });
+        setLoadStatus('Loaded saved inventory.');
+        encryptedInventoryLoaded = true;
+        return true;
+      }
+      async function attemptEncryptedAutoLoad(forceReload=false){
+        if (!IS_INVENTORY) return false;
+        if (encryptedInventoryLoaded && !forceReload) return true;
+        if (encryptedLoadInFlight) return true;
+        const meta = await fetchEncryptionMetaCached();
+        if (!meta || meta.status !== 'encrypted_v1') {
+          return false;
+        }
+        const masterKey = await getMasterKeyFromBridge();
+        if (!masterKey) {
+          setLoadStatus('Unlock in the Security tab to view saved inventory.');
+          return true;
+        }
+        encryptedLoadInFlight = true;
+        try {
+          return await loadEncryptedInventory(masterKey);
+        } catch (err) {
+          setLoadStatus(err && err.message ? err.message : 'Failed to read encrypted inventory.', true);
+          return true;
+        } finally {
+          encryptedLoadInFlight = false;
+        }
+      }
+      async function autoLoadInventory(){
+        if (IS_INVENTORY) {
+          const handled = await attemptEncryptedAutoLoad();
+          if (handled) return;
+          if (SAVE_CONFIG.autoLoadUrl) {
+            const loadOptions = { updateInventory: true };
+            loadDeckFromUrl(SAVE_CONFIG.autoLoadUrl, loadOptions);
+          }
+          return;
+        }
+        if (SAVE_CONFIG.autoLoadUrl) {
+          loadDeckFromUrl(SAVE_CONFIG.autoLoadUrl);
+        }
+      }
+      if (zkBridge && typeof zkBridge.onMasterKey === 'function') {
+        zkBridge.onMasterKey((event) => {
+          if (event && event.metadata) {
+            encryptionMeta = event.metadata;
+          }
+          if (IS_INVENTORY) {
+            attemptEncryptedAutoLoad(true);
+          }
+        });
       }
       function updateLoadDeckButton(updateMessage=true){
         if (!els.btnLoadDeck) return;
