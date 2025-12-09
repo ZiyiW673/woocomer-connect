@@ -708,6 +708,18 @@ function ptcgdm_get_admin_ui_content() {
             if (!res.ok) throw new Error('Failed to store encrypted inventory');
           };
 
+          const loadPlaintextInventory = async () => {
+            const res = await fetch(`${apiBase}/plaintext-inventory`, { credentials: 'include' });
+            if (!res.ok) {
+              throw new Error('Could not read existing inventory for encryption.');
+            }
+            const payload = await res.json();
+            if (!payload || typeof payload.data !== 'string') {
+              throw new Error('Unexpected inventory payload.');
+            }
+            return payload.data;
+          };
+
           const loadVerifier = async (key) => {
             if (!metadata || !metadata.verifier) throw new Error('Missing verifier');
             const plaintext = await decryptWithKey(key, metadata.verifier);
@@ -727,21 +739,27 @@ function ptcgdm_get_admin_ui_content() {
               setStatus('initial', 'Passwords do not match.', 'error');
               return;
             }
-            setStatus('initial', 'Encrypting inventory…');
-            const saltPw = bytesToB64(crypto.getRandomValues(new Uint8Array(16)));
-            const pwIterations = 200000;
-            const pwKey = await deriveKey(password, saltPw, pwIterations);
-            const master = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, true, ['encrypt', 'decrypt']);
-            masterKey = master;
-            const rawMaster = await crypto.subtle.exportKey('raw', master);
-            const masterWrappedPw = await encryptWithKey(pwKey, rawMaster);
-            const verifierBlob = await encryptWithKey(master, new TextEncoder().encode(JSON.stringify({ magic: 'SHOP_SEC_V1' })));
+            try {
+              setStatus('initial', 'Encrypting inventory…');
+              const saltPw = bytesToB64(crypto.getRandomValues(new Uint8Array(16)));
+              const pwIterations = 200000;
+              const pwKey = await deriveKey(password, saltPw, pwIterations);
+              const master = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, true, ['encrypt', 'decrypt']);
+              masterKey = master;
+              const rawMaster = await crypto.subtle.exportKey('raw', master);
+              const masterWrappedPw = await encryptWithKey(pwKey, rawMaster);
+              const verifierBlob = await encryptWithKey(master, new TextEncoder().encode(JSON.stringify({ magic: 'SHOP_SEC_V1' })));
 
-            const encryptedEmpty = await encryptWithKey(master, new TextEncoder().encode('[]'));
+              const plaintext = await loadPlaintextInventory();
+              const encrypted = await encryptWithKey(master, new TextEncoder().encode(plaintext));
 
-            await saveEncryptedInventory(encryptedEmpty);
-            await saveMeta({ status: 'encrypted_v1', pw_salt: saltPw, pw_iterations: pwIterations, verifier: verifierBlob, master_wrapped_pw: masterWrappedPw });
-            setStatus('initial', 'Encryption completed. You can now unlock with your password.', 'success');
+              await saveEncryptedInventory(encrypted);
+              await saveMeta({ status: 'encrypted_v1', pw_salt: saltPw, pw_iterations: pwIterations, verifier: verifierBlob, master_wrapped_pw: masterWrappedPw });
+              setStatus('initial', 'Encryption completed. You can now unlock with your password.', 'success');
+            } catch (err) {
+              masterKey = null;
+              setStatus('initial', err && err.message ? err.message : 'Encryption failed.', 'error');
+            }
           };
 
           const unlockWithPassword = async () => {

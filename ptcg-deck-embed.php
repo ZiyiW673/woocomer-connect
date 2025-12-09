@@ -9195,6 +9195,25 @@ function ptcgdm_get_encryption_meta() {
   return $clean;
 }
 
+function ptcgdm_validate_encryption_blob($blob) {
+  if (!is_array($blob) || !isset($blob['iv']) || !isset($blob['data'])) {
+    return null;
+  }
+  $iv   = is_string($blob['iv']) ? trim($blob['iv']) : '';
+  $data = is_string($blob['data']) ? trim($blob['data']) : '';
+  if ($iv === '' || $data === '') {
+    return null;
+  }
+  if (!preg_match('~^[A-Za-z0-9+/=]+$~', $iv) || !preg_match('~^[A-Za-z0-9+/=]+$~', $data)) {
+    return null;
+  }
+
+  return [
+    'iv'   => $iv,
+    'data' => $data,
+  ];
+}
+
 /**
  * Register REST routes for encryption metadata and encrypted payload storage.
  */
@@ -9202,34 +9221,40 @@ function ptcgdm_register_encryption_routes() {
   register_rest_route('ptcgdm/v1', '/encryption-meta', [
     'methods'  => WP_REST_Server::READABLE,
     'callback' => function () {
-      if (!ptcgdm_admin_ui_is_authorized()) {
-        return new WP_Error('forbidden', 'Not authorized.', ['status' => 403]);
-      }
       return ptcgdm_get_encryption_meta();
     },
-    'permission_callback' => '__return_true',
+    'permission_callback' => function () {
+      return ptcgdm_admin_ui_is_authorized();
+    },
   ]);
 
   register_rest_route('ptcgdm/v1', '/encryption-meta', [
     'methods'  => WP_REST_Server::EDITABLE,
     'callback' => function (WP_REST_Request $request) {
-      if (!ptcgdm_admin_ui_is_authorized()) {
-        return new WP_Error('forbidden', 'Not authorized.', ['status' => 403]);
-      }
-
       $body = json_decode($request->get_body(), true);
       if (!is_array($body)) {
         return new WP_Error('invalid_body', 'Invalid payload.', ['status' => 400]);
       }
 
       $status   = isset($body['status']) ? sanitize_text_field((string) $body['status']) : 'unencrypted';
+      if (!in_array($status, ['unencrypted', 'encrypted_v1'], true)) {
+        return new WP_Error('invalid_status', 'Invalid encryption status.', ['status' => 400]);
+      }
+
       $pw_salt  = isset($body['pw_salt']) ? sanitize_text_field((string) $body['pw_salt']) : '';
       $pw_iter  = isset($body['pw_iterations']) ? absint($body['pw_iterations']) : 0;
-      $verifier = isset($body['verifier']) ? $body['verifier'] : null;
-      $wrapped  = isset($body['master_wrapped_pw']) ? $body['master_wrapped_pw'] : null;
+      $verifier = isset($body['verifier']) ? ptcgdm_validate_encryption_blob($body['verifier']) : null;
+      $wrapped  = isset($body['master_wrapped_pw']) ? ptcgdm_validate_encryption_blob($body['master_wrapped_pw']) : null;
 
-      if ($status === 'encrypted_v1' && (empty($pw_salt) || empty($pw_iter) || empty($verifier) || empty($wrapped))) {
-        return new WP_Error('invalid_meta', 'Missing encryption metadata.', ['status' => 400]);
+      if ($status === 'encrypted_v1') {
+        if (empty($pw_salt) || empty($pw_iter) || !$verifier || !$wrapped) {
+          return new WP_Error('invalid_meta', 'Missing encryption metadata.', ['status' => 400]);
+        }
+      } else {
+        $pw_salt = '';
+        $pw_iter = 0;
+        $verifier = null;
+        $wrapped = null;
       }
 
       $meta = [
@@ -9244,16 +9269,14 @@ function ptcgdm_register_encryption_routes() {
 
       return ptcgdm_get_encryption_meta();
     },
-    'permission_callback' => '__return_true',
+    'permission_callback' => function () {
+      return ptcgdm_admin_ui_is_authorized();
+    },
   ]);
 
   register_rest_route('ptcgdm/v1', '/encrypted-inventory', [
     'methods'  => WP_REST_Server::READABLE,
     'callback' => function (WP_REST_Request $request) {
-      if (!ptcgdm_admin_ui_is_authorized()) {
-        return new WP_Error('forbidden', 'Not authorized.', ['status' => 403]);
-      }
-
       $file = sanitize_file_name($request->get_param('file') ?: 'inventory.enc');
       if ($file === '') {
         return new WP_Error('invalid_file', 'Invalid file name.', ['status' => 400]);
@@ -9265,29 +9288,32 @@ function ptcgdm_register_encryption_routes() {
       }
 
       $contents = file_get_contents($path);
+      $decoded  = json_decode($contents, true);
+      $blob     = ptcgdm_validate_encryption_blob($decoded);
+      if (!$blob) {
+        return new WP_Error('corrupt_blob', 'Stored payload is invalid.', ['status' => 500]);
+      }
       return [
         'file' => $file,
-        'blob' => json_decode($contents, true),
+        'blob' => $blob,
       ];
     },
-    'permission_callback' => '__return_true',
+    'permission_callback' => function () {
+      return ptcgdm_admin_ui_is_authorized();
+    },
   ]);
 
   register_rest_route('ptcgdm/v1', '/encrypted-inventory', [
     'methods'  => WP_REST_Server::EDITABLE,
     'callback' => function (WP_REST_Request $request) {
-      if (!ptcgdm_admin_ui_is_authorized()) {
-        return new WP_Error('forbidden', 'Not authorized.', ['status' => 403]);
-      }
-
       $body = json_decode($request->get_body(), true);
       if (!is_array($body)) {
         return new WP_Error('invalid_body', 'Invalid payload.', ['status' => 400]);
       }
 
       $file = isset($body['file']) ? sanitize_file_name((string) $body['file']) : 'inventory.enc';
-      $blob = isset($body['blob']) ? $body['blob'] : null;
-      if ($file === '' || !is_array($blob)) {
+      $blob = isset($body['blob']) ? ptcgdm_validate_encryption_blob($body['blob']) : null;
+      if ($file === '' || !$blob) {
         return new WP_Error('invalid_payload', 'File or blob missing.', ['status' => 400]);
       }
 
@@ -9303,7 +9329,38 @@ function ptcgdm_register_encryption_routes() {
 
       return [ 'file' => $file ];
     },
-    'permission_callback' => '__return_true',
+    'permission_callback' => function () {
+      return ptcgdm_admin_ui_is_authorized();
+    },
+  ]);
+
+  register_rest_route('ptcgdm/v1', '/plaintext-inventory', [
+    'methods'  => WP_REST_Server::READABLE,
+    'callback' => function (WP_REST_Request $request) {
+      $meta = ptcgdm_get_encryption_meta();
+      if (($meta['status'] ?? 'unencrypted') === 'encrypted_v1') {
+        return new WP_Error('forbidden', 'Inventory is already encrypted.', ['status' => 403]);
+      }
+
+      $dataset = ptcgdm_normalize_inventory_dataset_key($request->get_param('dataset'));
+      $path    = ptcgdm_get_inventory_path_for_dataset($dataset);
+      if (!file_exists($path)) {
+        return new WP_Error('not_found', 'Inventory file not found.', ['status' => 404]);
+      }
+
+      $contents = file_get_contents($path);
+      if ($contents === false) {
+        return new WP_Error('read_failed', 'Unable to read inventory.', ['status' => 500]);
+      }
+
+      return [
+        'dataset' => $dataset,
+        'data'    => $contents,
+      ];
+    },
+    'permission_callback' => function () {
+      return ptcgdm_admin_ui_is_authorized();
+    },
   ]);
 }
 add_action('rest_api_init', 'ptcgdm_register_encryption_routes');
