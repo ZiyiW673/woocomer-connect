@@ -744,9 +744,18 @@ function ptcgdm_get_admin_ui_content() {
 
           const loadPlaintextInventories = async () => {
             const results = {};
+            const warnings = [];
             for (const dataset of datasetKeys) {
-              const res = await fetch(`${apiBase}/plaintext-inventory?dataset=${encodeURIComponent(dataset)}`, { credentials: 'include' });
+              let res;
+              try {
+                res = await fetch(`${apiBase}/plaintext-inventory?dataset=${encodeURIComponent(dataset)}`, { credentials: 'include' });
+              } catch (err) {
+                warnings.push(`Using empty inventory for ${dataset}; request failed.`);
+                results[dataset] = '';
+                continue;
+              }
               if (res.status === 404) {
+                results[dataset] = '';
                 continue;
               }
               if (res.status === 403) {
@@ -754,20 +763,32 @@ function ptcgdm_get_admin_ui_content() {
                 throw new Error('Inventory already appears encrypted or access was denied. Refresh and unlock instead.');
               }
               if (!res.ok) {
-                throw new Error(`Could not read existing inventory for ${dataset}.`);
+                let detail = '';
+                try {
+                  detail = await res.text();
+                } catch (innerErr) {
+                  detail = '';
+                }
+                const suffix = detail ? `: ${detail}` : '';
+                warnings.push(`Using empty inventory for ${dataset}; fetch failed (${res.status}${suffix}).`);
+                results[dataset] = '';
+                continue;
               }
-              const payload = await res.json();
+              let payload = null;
+              try {
+                payload = await res.json();
+              } catch (err) {
+                payload = null;
+              }
               if (!payload || typeof payload.data !== 'string') {
-                throw new Error(`Unexpected inventory payload for ${dataset}.`);
+                warnings.push(`Inventory payload for ${dataset} was invalid; proceeding with empty content.`);
+                results[dataset] = '';
+                continue;
               }
               results[dataset] = payload.data;
             }
 
-            if (Object.keys(results).length === 0) {
-              throw new Error('No inventory files found to encrypt.');
-            }
-
-            return results;
+            return { map: results, warnings };
           };
 
           const loadVerifier = async (key) => {
@@ -806,7 +827,10 @@ function ptcgdm_get_admin_ui_content() {
               const masterWrappedPw = await encryptWithKey(pwKey, rawMaster);
               const verifierBlob = await encryptWithKey(master, new TextEncoder().encode(JSON.stringify({ magic: 'SHOP_SEC_V1' })));
 
-              const plaintextMap = await loadPlaintextInventories();
+              const { map: plaintextMap, warnings } = await loadPlaintextInventories();
+              if (warnings.length) {
+                setStatus('initial', warnings.join(' '), 'info');
+              }
               for (const dataset of Object.keys(plaintextMap)) {
                 const encrypted = await encryptWithKey(master, new TextEncoder().encode(plaintextMap[dataset]));
                 await saveEncryptedInventory(dataset, encrypted);
