@@ -614,7 +614,13 @@ function ptcgdm_get_admin_ui_content() {
 
         const securityRoot = wrapper.querySelector('[data-security-root]');
         if (securityRoot) {
-          const apiBase = `${window.location.origin.replace(/\/$/, '')}/wp-json/ptcgdm/v1`;
+        const apiBase = `${window.location.origin.replace(/\/$/, '')}/wp-json/ptcgdm/v1`;
+        const restNonce = '<?php echo esc_js(wp_create_nonce('wp_rest')); ?>';
+
+        const withRestNonce = (headers = {}) => {
+          if (!restNonce) return headers;
+          return { ...headers, 'X-WP-Nonce': restNonce };
+        };
           const datasetKeys = <?php echo wp_json_encode(array_keys(ptcgdm_get_dataset_definitions())); ?>;
           const sectionEls = Array.from(securityRoot.querySelectorAll('.ptcgdm-security__section'));
           const passwordInput = securityRoot.querySelector('#ptcgdm-security-password');
@@ -690,7 +696,10 @@ function ptcgdm_get_admin_ui_content() {
 
           const fetchMeta = async () => {
             try {
-              const res = await fetch(`${apiBase}/encryption-meta`, { credentials: 'include' });
+            const res = await fetch(`${apiBase}/encryption-meta`, {
+              credentials: 'include',
+              headers: withRestNonce(),
+            });
               if (!res.ok) throw new Error('Metadata request failed');
               metadata = await res.json();
             } catch (err) {
@@ -724,7 +733,7 @@ function ptcgdm_get_admin_ui_content() {
             const res = await fetch(`${apiBase}/encryption-meta`, {
               method: 'POST',
               credentials: 'include',
-              headers: { 'Content-Type': 'application/json' },
+              headers: withRestNonce({ 'Content-Type': 'application/json' }),
               body: JSON.stringify(body),
             });
             if (!res.ok) throw new Error('Failed to save metadata');
@@ -736,7 +745,7 @@ function ptcgdm_get_admin_ui_content() {
             const res = await fetch(`${apiBase}/encrypted-inventory`, {
               method: 'POST',
               credentials: 'include',
-              headers: { 'Content-Type': 'application/json' },
+              headers: withRestNonce({ 'Content-Type': 'application/json' }),
               body: JSON.stringify({ dataset, blob }),
             });
             if (!res.ok) throw new Error(`Failed to store encrypted inventory for ${dataset}`);
@@ -748,7 +757,10 @@ function ptcgdm_get_admin_ui_content() {
             for (const dataset of datasetKeys) {
               let res;
               try {
-                res = await fetch(`${apiBase}/plaintext-inventory?dataset=${encodeURIComponent(dataset)}`, { credentials: 'include' });
+                res = await fetch(`${apiBase}/plaintext-inventory?dataset=${encodeURIComponent(dataset)}`, {
+                  credentials: 'include',
+                  headers: withRestNonce(),
+                });
               } catch (err) {
                 warnings.push(`Using empty inventory for ${dataset}; request failed.`);
                 results[dataset] = '';
