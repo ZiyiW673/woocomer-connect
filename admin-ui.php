@@ -221,13 +221,47 @@ function ptcgdm_render_admin_orders_panel() {
  * Render the Admin UI security panel markup.
  */
 function ptcgdm_render_admin_security_panel() {
-  echo '<div class="wrap ptcgdm-security">';
+  echo '<div class="wrap ptcgdm-security" data-security-root="1">';
   echo '<h2>Security</h2>';
-  echo '<div class="ptcgdm-security__field">';
-  echo '<label for="ptcgdm-security-password">Encryption password</label>';
-  echo '<input type="password" id="ptcgdm-security-password" name="ptcgdm-security-password" class="ptcgdm-security__input" placeholder="Enter password" />';
+
+  echo '<div class="ptcgdm-security__section" data-section="initial">';
+  echo '<h3>Initial setup</h3>';
+  echo '<p class="ptcgdm-security__help">All inventory data will be encrypted in the browser before being saved. Losing your password and recovery key makes data unrecoverable.</p>';
+  echo '<div class="ptcgdm-security__field"><label for="ptcgdm-security-password">Password</label><input type="password" id="ptcgdm-security-password" class="ptcgdm-security__input" autocomplete="new-password" /></div>';
+  echo '<div class="ptcgdm-security__field"><label for="ptcgdm-security-password-confirm">Confirm password</label><input type="password" id="ptcgdm-security-password-confirm" class="ptcgdm-security__input" autocomplete="new-password" /></div>';
+  echo '<button type="button" class="ptcgdm-security__button" data-action="encrypt">Encrypt</button>';
+  echo '<div class="ptcgdm-security__status" data-status="initial" aria-live="polite"></div>';
   echo '</div>';
-  echo '<button type="button" class="ptcgdm-security__encrypt">Encrypt</button>';
+
+  echo '<div class="ptcgdm-security__section" data-section="password">';
+  echo '<h3>Password unlock</h3>';
+  echo '<div class="ptcgdm-security__field"><label for="ptcgdm-security-password-unlock">Password</label><input type="password" id="ptcgdm-security-password-unlock" class="ptcgdm-security__input" autocomplete="current-password" /></div>';
+  echo '<label class="ptcgdm-security__checkbox"><input type="checkbox" id="ptcgdm-security-remember-pin" /> Remember on this device with a PIN</label>';
+  echo '<div class="ptcgdm-security__field" data-pin-wrapper="1" hidden><label for="ptcgdm-security-pin-create">PIN</label><input type="password" id="ptcgdm-security-pin-create" class="ptcgdm-security__input" inputmode="numeric" pattern="[0-9]*" autocomplete="off" /></div>';
+  echo '<button type="button" class="ptcgdm-security__button" data-action="unlock-password">Verify password / Unlock</button>';
+  echo '<div class="ptcgdm-security__status" data-status="password" aria-live="polite"></div>';
+  echo '</div>';
+
+  echo '<div class="ptcgdm-security__section" data-section="pin">';
+  echo '<h3>PIN unlock</h3>';
+  echo '<div class="ptcgdm-security__field"><label for="ptcgdm-security-pin-unlock">PIN</label><input type="password" id="ptcgdm-security-pin-unlock" class="ptcgdm-security__input" inputmode="numeric" pattern="[0-9]*" autocomplete="off" /></div>';
+  echo '<button type="button" class="ptcgdm-security__button" data-action="unlock-pin">Unlock with PIN</button>';
+  echo '<div class="ptcgdm-security__status" data-status="pin" aria-live="polite"></div>';
+  echo '</div>';
+
+  echo '<div class="ptcgdm-security__section" data-section="recovery">';
+  echo '<h3>Recovery</h3>';
+  echo '<p class="ptcgdm-security__help">Download a recovery key while unlocked to restore access if the password is lost. The recovery key is never sent to the server.</p>';
+  echo '<div class="ptcgdm-security__actions">';
+  echo '<button type="button" class="ptcgdm-security__button" data-action="download-recovery">Download Recovery Key</button>';
+  echo '<label class="ptcgdm-security__upload">';
+  echo '<span class="ptcgdm-security__button ptcgdm-security__button--ghost" role="button">Use Recovery Key</span>';
+  echo '<input type="file" accept="application/json" data-action="upload-recovery" hidden />';
+  echo '</label>';
+  echo '</div>';
+  echo '<div class="ptcgdm-security__status" data-status="recovery" aria-live="polite"></div>';
+  echo '</div>';
+
   echo '</div>';
 }
 
@@ -277,9 +311,19 @@ function ptcgdm_get_admin_ui_content() {
       .ptcgdm-admin-ui__panel { display: none; }
       .ptcgdm-admin-ui__panel.is-active { display: block; }
       .ptcgdm-security { background: #0f1218; border: 1px solid #1f2533; border-radius: 12px; padding: 16px; color: #cfd6e6; }
+      .ptcgdm-security__section { margin-bottom: 20px; padding: 12px; border: 1px solid #1f2533; border-radius: 10px; background: #0c101a; }
+      .ptcgdm-security__section h3 { margin: 0 0 6px; }
+      .ptcgdm-security__help { margin: 6px 0 12px; color: #9fabc7; }
       .ptcgdm-security__field { margin-bottom: 12px; display: flex; flex-direction: column; gap: 6px; }
       .ptcgdm-security__input { background: #0c101a; border: 1px solid #324061; border-radius: 8px; padding: 10px 12px; color: #fff; }
-      .ptcgdm-security__encrypt { background: #1b2034; border: 1px solid #324061; color: #fff; padding: 10px 12px; border-radius: 10px; cursor: pointer; font-weight: 700; }
+      .ptcgdm-security__button { background: #1b2034; border: 1px solid #324061; color: #fff; padding: 10px 12px; border-radius: 10px; cursor: pointer; font-weight: 700; }
+      .ptcgdm-security__button--ghost { background: #0f1218; border-style: dashed; }
+      .ptcgdm-security__status { margin-top: 8px; min-height: 18px; color: #cfd6e6; }
+      .ptcgdm-security__status--error { color: #ff9c9c; }
+      .ptcgdm-security__status--success { color: #7ee0a3; }
+      .ptcgdm-security__checkbox { display: inline-flex; align-items: center; gap: 6px; margin-bottom: 8px; }
+      .ptcgdm-security__actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+      .ptcgdm-security__upload input { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
       .ptcgdm-orders__list { display: none; }
       .ptcgdm-orders__list.is-active, .ptcgdm-orders__detail-panel.is-active { display: block; }
       .ptcgdm-orders__detail-panel { display: none; background: #0f1218; border: 1px solid #1f2533; border-radius: 12px; padding: 16px; color: #cfd6e6; }
@@ -563,6 +607,273 @@ function ptcgdm_get_admin_ui_content() {
 
             hidePopover();
           });
+        }
+
+        const securityRoot = wrapper.querySelector('[data-security-root]');
+        if (securityRoot) {
+          const apiBase = `${window.location.origin.replace(/\/$/, '')}/wp-json/ptcgdm/v1`;
+          const sectionEls = Array.from(securityRoot.querySelectorAll('.ptcgdm-security__section'));
+          const passwordInput = securityRoot.querySelector('#ptcgdm-security-password');
+          const passwordConfirmInput = securityRoot.querySelector('#ptcgdm-security-password-confirm');
+          const unlockPasswordInput = securityRoot.querySelector('#ptcgdm-security-password-unlock');
+          const rememberCheckbox = securityRoot.querySelector('#ptcgdm-security-remember-pin');
+          const pinCreateWrapper = securityRoot.querySelector('[data-pin-wrapper]');
+          const pinCreateInput = securityRoot.querySelector('#ptcgdm-security-pin-create');
+          const pinUnlockInput = securityRoot.querySelector('#ptcgdm-security-pin-unlock');
+          const statuses = securityRoot.querySelectorAll('.ptcgdm-security__status');
+          const recoveryUpload = securityRoot.querySelector('input[data-action="upload-recovery"]');
+          const recoveryDownloadButton = securityRoot.querySelector('[data-action="download-recovery"]');
+
+          let metadata = null;
+          let masterKey = null;
+
+          const setStatus = (section, message, type = 'info') => {
+            statuses.forEach((el) => {
+              if (el.dataset.status !== section) return;
+              el.textContent = message || '';
+              el.classList.remove('ptcgdm-security__status--error', 'ptcgdm-security__status--success');
+              if (type === 'error') {
+                el.classList.add('ptcgdm-security__status--error');
+              } else if (type === 'success') {
+                el.classList.add('ptcgdm-security__status--success');
+              }
+            });
+          };
+
+          const toggleSections = () => {
+            const status = metadata && metadata.status === 'encrypted_v1' ? 'encrypted_v1' : 'unencrypted';
+            sectionEls.forEach((section) => {
+              const id = section.dataset.section;
+              if (id === 'initial') {
+                section.hidden = status === 'encrypted_v1';
+              } else if (id === 'password' || id === 'recovery') {
+                section.hidden = status !== 'encrypted_v1';
+              } else if (id === 'pin') {
+                const hasPin = !!window.localStorage.getItem('ptcgdm_zk_master_pin_blob');
+                section.hidden = status !== 'encrypted_v1' || !hasPin;
+              }
+            });
+          };
+
+          const b64ToBytes = (b64) => Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+          const bytesToB64 = (bytes) => btoa(String.fromCharCode(...new Uint8Array(bytes)));
+
+          const deriveKey = async (password, saltB64, iterations) => {
+            const enc = new TextEncoder();
+            const baseKey = await crypto.subtle.importKey('raw', enc.encode(password), 'PBKDF2', false, ['deriveKey']);
+            return crypto.subtle.deriveKey({ name: 'PBKDF2', hash: 'SHA-256', salt: b64ToBytes(saltB64), iterations }, baseKey, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+          };
+
+          const encryptWithKey = async (key, dataBytes) => {
+            const iv = crypto.getRandomValues(new Uint8Array(12));
+            const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, dataBytes);
+            return { iv: bytesToB64(iv), data: bytesToB64(ciphertext) };
+          };
+
+          const decryptWithKey = async (key, blob) => {
+            const iv = b64ToBytes(blob.iv || '');
+            const data = b64ToBytes(blob.data || '');
+            return crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, data);
+          };
+
+          const fetchMeta = async () => {
+            try {
+              const res = await fetch(`${apiBase}/encryption-meta`, { credentials: 'include' });
+              metadata = await res.json();
+            } catch (err) {
+              metadata = { status: 'unencrypted' };
+            }
+            toggleSections();
+          };
+
+          const saveMeta = async (body) => {
+            const res = await fetch(`${apiBase}/encryption-meta`, {
+              method: 'POST',
+              credentials: 'include',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(body),
+            });
+            if (!res.ok) throw new Error('Failed to save metadata');
+            metadata = await res.json();
+            toggleSections();
+          };
+
+          const saveEncryptedInventory = async (blob) => {
+            const res = await fetch(`${apiBase}/encrypted-inventory`, {
+              method: 'POST',
+              credentials: 'include',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ file: 'inventory.enc', blob }),
+            });
+            if (!res.ok) throw new Error('Failed to store encrypted inventory');
+          };
+
+          const loadVerifier = async (key) => {
+            if (!metadata || !metadata.verifier) throw new Error('Missing verifier');
+            const plaintext = await decryptWithKey(key, metadata.verifier);
+            const text = new TextDecoder().decode(plaintext);
+            const json = JSON.parse(text);
+            if (json.magic !== 'SHOP_SEC_V1') throw new Error('Verifier mismatch');
+          };
+
+          const performInitialEncrypt = async () => {
+            const password = (passwordInput.value || '').trim();
+            const confirm = (passwordConfirmInput.value || '').trim();
+            if (!password) {
+              setStatus('initial', 'Password is required.', 'error');
+              return;
+            }
+            if (password !== confirm) {
+              setStatus('initial', 'Passwords do not match.', 'error');
+              return;
+            }
+            setStatus('initial', 'Encrypting inventory…');
+            const saltPw = bytesToB64(crypto.getRandomValues(new Uint8Array(16)));
+            const pwIterations = 200000;
+            const pwKey = await deriveKey(password, saltPw, pwIterations);
+            const master = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, true, ['encrypt', 'decrypt']);
+            masterKey = master;
+            const rawMaster = await crypto.subtle.exportKey('raw', master);
+            const masterWrappedPw = await encryptWithKey(pwKey, rawMaster);
+            const verifierBlob = await encryptWithKey(master, new TextEncoder().encode(JSON.stringify({ magic: 'SHOP_SEC_V1' })));
+
+            const encryptedEmpty = await encryptWithKey(master, new TextEncoder().encode('[]'));
+
+            await saveEncryptedInventory(encryptedEmpty);
+            await saveMeta({ status: 'encrypted_v1', pw_salt: saltPw, pw_iterations: pwIterations, verifier: verifierBlob, master_wrapped_pw: masterWrappedPw });
+            setStatus('initial', 'Encryption completed. You can now unlock with your password.', 'success');
+          };
+
+          const unlockWithPassword = async () => {
+            if (!metadata || metadata.status !== 'encrypted_v1') {
+              setStatus('password', 'Encryption not set up yet.', 'error');
+              return;
+            }
+            const password = (unlockPasswordInput.value || '').trim();
+            if (!password) {
+              setStatus('password', 'Password is required.', 'error');
+              return;
+            }
+            try {
+              const pwKey = await deriveKey(password, metadata.pw_salt, metadata.pw_iterations);
+              const rawMaster = await decryptWithKey(pwKey, metadata.master_wrapped_pw);
+              masterKey = await crypto.subtle.importKey('raw', rawMaster, { name: 'AES-GCM' }, true, ['encrypt', 'decrypt']);
+              await loadVerifier(masterKey);
+
+              if (rememberCheckbox.checked) {
+                const pinValue = (pinCreateInput.value || '').trim();
+                if (!pinValue) throw new Error('PIN is required to remember on this device.');
+                const saltPin = bytesToB64(crypto.getRandomValues(new Uint8Array(16)));
+                const pinKey = await deriveKey(pinValue, saltPin, 50000);
+                const wrappedMasterPin = await encryptWithKey(pinKey, await crypto.subtle.exportKey('raw', masterKey));
+                window.localStorage.setItem('ptcgdm_zk_master_pin_blob', JSON.stringify({ salt_pin: saltPin, wrapped_master_pin: wrappedMasterPin }));
+              }
+
+              setStatus('password', 'Unlocked.', 'success');
+              toggleSections();
+            } catch (err) {
+              masterKey = null;
+              setStatus('password', err && err.message ? err.message : 'Failed to unlock.', 'error');
+            }
+          };
+
+          const unlockWithPin = async () => {
+            const blobRaw = window.localStorage.getItem('ptcgdm_zk_master_pin_blob');
+            if (!blobRaw) {
+              setStatus('pin', 'No PIN is stored on this device.', 'error');
+              return;
+            }
+            const pinValue = (pinUnlockInput.value || '').trim();
+            if (!pinValue) {
+              setStatus('pin', 'PIN is required.', 'error');
+              return;
+            }
+            try {
+              const pinData = JSON.parse(blobRaw);
+              const pinKey = await deriveKey(pinValue, pinData.salt_pin, 50000);
+              const rawMaster = await decryptWithKey(pinKey, pinData.wrapped_master_pin);
+              masterKey = await crypto.subtle.importKey('raw', rawMaster, { name: 'AES-GCM' }, true, ['encrypt', 'decrypt']);
+              await loadVerifier(masterKey);
+              setStatus('pin', 'Unlocked with PIN.', 'success');
+            } catch (err) {
+              masterKey = null;
+              setStatus('pin', 'Wrong PIN or local key is corrupted.', 'error');
+            }
+          };
+
+          const downloadRecovery = async () => {
+            if (!masterKey) {
+              setStatus('recovery', 'Unlock with your password or PIN first.', 'error');
+              return;
+            }
+            const raw = await crypto.subtle.exportKey('raw', masterKey);
+            const payload = { type: 'ptcgdm_recovery_key_v1', master_b64: bytesToB64(raw) };
+            const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'ptcgdm-recovery-key.json';
+            a.click();
+            URL.revokeObjectURL(url);
+            setStatus('recovery', 'Recovery key downloaded.', 'success');
+          };
+
+          const handleRecoveryUpload = async (file) => {
+            try {
+              const text = await file.text();
+              const data = JSON.parse(text);
+              if (data.type !== 'ptcgdm_recovery_key_v1' || !data.master_b64) {
+                throw new Error('Invalid recovery key.');
+              }
+              const rawMaster = b64ToBytes(data.master_b64);
+              const recovered = await crypto.subtle.importKey('raw', rawMaster, { name: 'AES-GCM' }, true, ['encrypt', 'decrypt']);
+              await loadVerifier(recovered);
+              masterKey = recovered;
+              setStatus('recovery', 'Recovery key accepted. Set a new password to continue.', 'success');
+            } catch (err) {
+              setStatus('recovery', err && err.message ? err.message : 'Recovery failed.', 'error');
+            }
+          };
+
+          const handleActionClick = (event) => {
+            const action = event.target.dataset.action;
+            if (!action) return;
+            if (action === 'encrypt') {
+              performInitialEncrypt();
+            } else if (action === 'unlock-password') {
+              unlockWithPassword();
+            } else if (action === 'unlock-pin') {
+              unlockWithPin();
+            } else if (action === 'download-recovery') {
+              downloadRecovery();
+            }
+          };
+
+          rememberCheckbox.addEventListener('change', () => {
+            if (!pinCreateWrapper) return;
+            pinCreateWrapper.hidden = !rememberCheckbox.checked;
+          });
+
+          securityRoot.addEventListener('click', handleActionClick);
+
+          if (recoveryUpload) {
+            recoveryUpload.addEventListener('change', (event) => {
+              const file = event.target.files && event.target.files[0];
+              if (!file) return;
+              handleRecoveryUpload(file);
+              recoveryUpload.value = '';
+            });
+          }
+
+          if (recoveryDownloadButton) {
+            recoveryDownloadButton.addEventListener('click', (event) => {
+              if (event.isTrusted !== false) {
+                downloadRecovery();
+              }
+            });
+          }
+
+          fetchMeta();
         }
       })();
     </script>
