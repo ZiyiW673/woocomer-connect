@@ -305,10 +305,25 @@ function ptcgdm_get_encrypted_inventory_path_for_dataset($dataset_key = '') {
 function ptcgdm_get_encrypted_inventory_candidates($dataset_key = '') {
   $dir = trailingslashit(ptcgdm_get_inventory_dir());
   $base = pathinfo(ptcgdm_get_inventory_filename_for_dataset($dataset_key), PATHINFO_FILENAME);
-  return [
+  $candidates = [
     $dir . $base . '.enc.json',
     $dir . $base . '.json.enc',
   ];
+
+  $slug = ptcgdm_slugify_inventory_dataset_key($dataset_key);
+  if ($slug !== '' && strpos($base, $slug) === false) {
+    $candidates[] = $dir . $base . '-' . $slug . '.enc.json';
+    $candidates[] = $dir . $base . '-' . $slug . '.json.enc';
+  }
+
+  // Also scan for any `.enc.json` payloads in the directory to catch legacy names.
+  foreach (glob($dir . '*.enc.json') as $path) {
+    if (!in_array($path, $candidates, true)) {
+      $candidates[] = $path;
+    }
+  }
+
+  return $candidates;
 }
 
 function ptcgdm_find_existing_encrypted_inventory_path($dataset_key = '') {
