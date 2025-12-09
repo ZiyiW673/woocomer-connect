@@ -979,7 +979,7 @@ function ptcgdm_render_builder(array $config = []){
       const DATASET_KEY = typeof SAVE_CONFIG.datasetKey === 'string' ? SAVE_CONFIG.datasetKey : 'pokemon';
       const DATASET_LABEL = typeof SAVE_CONFIG.datasetLabel === 'string' ? SAVE_CONFIG.datasetLabel.trim() : '';
       const IS_ONE_PIECE = DATASET_KEY === 'one_piece';
-      const zkBridge = (window.parent && window.parent.ptcgdmZkBridge) ? window.parent.ptcgdmZkBridge : null;
+      let zkBridge = null;
       let encryptionMeta = null;
       let encryptedInventoryLoaded = false;
       let encryptedLoadInFlight = false;
@@ -4554,10 +4554,20 @@ function ptcgdm_render_builder(array $config = []){
         const data = b64ToBytesSafe(blob.data);
         return crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, data);
       }
+      const resolveZkBridge = () => {
+        const bridge = (window.parent && window.parent.ptcgdmZkBridge)
+          ? window.parent.ptcgdmZkBridge
+          : (window.ptcgdmZkBridge || null);
+        if (bridge && zkBridge !== bridge) {
+          zkBridge = bridge;
+        }
+        return zkBridge;
+      };
       async function fetchEncryptionMetaCached(){
+        const bridge = resolveZkBridge();
         if (encryptionMeta) return encryptionMeta;
-        if (zkBridge && typeof zkBridge.getMetadata === 'function') {
-          const bridgeMeta = zkBridge.getMetadata();
+        if (bridge && typeof bridge.getMetadata === 'function') {
+          const bridgeMeta = bridge.getMetadata();
           if (bridgeMeta) {
             encryptionMeta = bridgeMeta;
             return encryptionMeta;
@@ -4574,8 +4584,9 @@ function ptcgdm_render_builder(array $config = []){
         return encryptionMeta;
       }
       async function getMasterKeyFromBridge(){
-        if (!zkBridge || typeof zkBridge.getMasterKeyBytes !== 'function') return null;
-        const raw = await zkBridge.getMasterKeyBytes();
+        const bridge = resolveZkBridge();
+        if (!bridge || typeof bridge.getMasterKeyBytes !== 'function') return null;
+        const raw = await bridge.getMasterKeyBytes();
         if (!raw || !raw.byteLength) return null;
         return crypto.subtle.importKey('raw', raw, { name: 'AES-GCM' }, true, ['decrypt']);
       }
@@ -4643,8 +4654,13 @@ function ptcgdm_render_builder(array $config = []){
           loadDeckFromUrl(SAVE_CONFIG.autoLoadUrl);
         }
       }
-      if (zkBridge && typeof zkBridge.onMasterKey === 'function') {
-        zkBridge.onMasterKey((event) => {
+      const attachBridgeListener = () => {
+        const bridge = resolveZkBridge();
+        if (!bridge || typeof bridge.onMasterKey !== 'function') return false;
+        if (bridge.metadata) {
+          encryptionMeta = bridge.metadata;
+        }
+        bridge.onMasterKey((event) => {
           if (event && event.metadata) {
             encryptionMeta = event.metadata;
           }
@@ -4652,6 +4668,21 @@ function ptcgdm_render_builder(array $config = []){
             attemptEncryptedAutoLoad(true);
           }
         });
+        if (IS_INVENTORY) {
+          getMasterKeyFromBridge().then((key) => {
+            if (key) {
+              attemptEncryptedAutoLoad(true);
+            }
+          }).catch(() => {});
+        }
+        return true;
+      };
+      if (!attachBridgeListener()) {
+        const bridgePoll = window.setInterval(() => {
+          if (attachBridgeListener()) {
+            window.clearInterval(bridgePoll);
+          }
+        }, 500);
       }
       function updateLoadDeckButton(updateMessage=true){
         if (!els.btnLoadDeck) return;
