@@ -259,6 +259,9 @@ function ptcgdm_render_admin_security_panel() {
   echo '<input type="file" accept="application/json" data-action="upload-recovery" hidden />';
   echo '</label>';
   echo '</div>';
+  echo '<div class="ptcgdm-security__field" data-recovery-reset="1" hidden><label for="ptcgdm-security-recovery-password">New password</label><input type="password" id="ptcgdm-security-recovery-password" class="ptcgdm-security__input" autocomplete="new-password" /></div>';
+  echo '<div class="ptcgdm-security__field" data-recovery-reset="1" hidden><label for="ptcgdm-security-recovery-confirm">Confirm new password</label><input type="password" id="ptcgdm-security-recovery-confirm" class="ptcgdm-security__input" autocomplete="new-password" /></div>';
+  echo '<button type="button" class="ptcgdm-security__button" data-action="reset-password" data-recovery-reset="1" hidden>Set new password</button>';
   echo '<div class="ptcgdm-security__status" data-status="recovery" aria-live="polite"></div>';
   echo '</div>';
 
@@ -623,6 +626,9 @@ function ptcgdm_get_admin_ui_content() {
           const statuses = securityRoot.querySelectorAll('.ptcgdm-security__status');
           const recoveryUpload = securityRoot.querySelector('input[data-action="upload-recovery"]');
           const recoveryDownloadButton = securityRoot.querySelector('[data-action="download-recovery"]');
+          const recoveryResetEls = Array.from(securityRoot.querySelectorAll('[data-recovery-reset]'));
+          const recoveryPasswordInput = securityRoot.querySelector('#ptcgdm-security-recovery-password');
+          const recoveryConfirmInput = securityRoot.querySelector('#ptcgdm-security-recovery-confirm');
 
           let metadata = null;
           let masterKey = null;
@@ -652,6 +658,11 @@ function ptcgdm_get_admin_ui_content() {
                 const hasPin = !!window.localStorage.getItem('ptcgdm_zk_master_pin_blob');
                 section.hidden = status !== 'encrypted_v1' || !hasPin;
               }
+            });
+
+            const shouldShowReset = status === 'encrypted_v1' && !!masterKey;
+            recoveryResetEls.forEach((el) => {
+              el.hidden = !shouldShowReset;
             });
           };
 
@@ -756,6 +767,7 @@ function ptcgdm_get_admin_ui_content() {
               await saveEncryptedInventory(encrypted);
               await saveMeta({ status: 'encrypted_v1', pw_salt: saltPw, pw_iterations: pwIterations, verifier: verifierBlob, master_wrapped_pw: masterWrappedPw });
               setStatus('initial', 'Encryption completed. You can now unlock with your password.', 'success');
+              toggleSections();
             } catch (err) {
               masterKey = null;
               setStatus('initial', err && err.message ? err.message : 'Encryption failed.', 'error');
@@ -813,6 +825,7 @@ function ptcgdm_get_admin_ui_content() {
               masterKey = await crypto.subtle.importKey('raw', rawMaster, { name: 'AES-GCM' }, true, ['encrypt', 'decrypt']);
               await loadVerifier(masterKey);
               setStatus('pin', 'Unlocked with PIN.', 'success');
+              toggleSections();
             } catch (err) {
               masterKey = null;
               setStatus('pin', 'Wrong PIN or local key is corrupted.', 'error');
@@ -848,8 +861,44 @@ function ptcgdm_get_admin_ui_content() {
               await loadVerifier(recovered);
               masterKey = recovered;
               setStatus('recovery', 'Recovery key accepted. Set a new password to continue.', 'success');
+              toggleSections();
             } catch (err) {
               setStatus('recovery', err && err.message ? err.message : 'Recovery failed.', 'error');
+            }
+          };
+
+          const resetPasswordWithRecovery = async () => {
+            if (!masterKey) {
+              setStatus('recovery', 'Unlock with your password, PIN, or recovery key first.', 'error');
+              return;
+            }
+
+            const password = (recoveryPasswordInput && recoveryPasswordInput.value || '').trim();
+            const confirm = (recoveryConfirmInput && recoveryConfirmInput.value || '').trim();
+
+            if (!password || !confirm) {
+              setStatus('recovery', 'New password and confirmation are required.', 'error');
+              return;
+            }
+
+            if (password !== confirm) {
+              setStatus('recovery', 'Passwords do not match.', 'error');
+              return;
+            }
+
+            try {
+              const saltPw = bytesToB64(crypto.getRandomValues(new Uint8Array(16)));
+              const pwIterations = 200000;
+              const pwKey = await deriveKey(password, saltPw, pwIterations);
+              const rawMaster = await crypto.subtle.exportKey('raw', masterKey);
+              const masterWrappedPw = await encryptWithKey(pwKey, rawMaster);
+              const verifierBlob = metadata && metadata.verifier ? metadata.verifier : await encryptWithKey(masterKey, new TextEncoder().encode(JSON.stringify({ magic: 'SHOP_SEC_V1' })));
+
+              await saveMeta({ status: 'encrypted_v1', pw_salt: saltPw, pw_iterations: pwIterations, verifier: verifierBlob, master_wrapped_pw: masterWrappedPw });
+              setStatus('recovery', 'Password reset. You can now unlock with the new password.', 'success');
+              toggleSections();
+            } catch (err) {
+              setStatus('recovery', err && err.message ? err.message : 'Failed to set new password.', 'error');
             }
           };
 
@@ -864,6 +913,8 @@ function ptcgdm_get_admin_ui_content() {
               unlockWithPin();
             } else if (action === 'download-recovery') {
               downloadRecovery();
+            } else if (action === 'reset-password') {
+              resetPasswordWithRecovery();
             }
           };
 
