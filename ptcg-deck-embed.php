@@ -528,6 +528,7 @@ function ptcgdm_render_builder(array $config = []){
   $url_base = ptcgdm_get_inventory_url();
   $inventory_filename = ptcgdm_get_inventory_filename_for_dataset($dataset_key);
   $inventory_label = 'Card Inventory';
+  $encrypted_inventory_path = ptcgdm_get_encrypted_inventory_path_for_dataset($dataset_key);
   if ($dataset_key === 'one_piece') {
     $inventory_label = 'One Piece Inventory';
   } elseif ($dataset_key !== 'pokemon') {
@@ -562,8 +563,14 @@ function ptcgdm_render_builder(array $config = []){
     $auto_load_url = ptcgdm_get_inventory_url_for_dataset($dataset_key);
   }
 
+  $encryption_meta = ptcgdm_get_encryption_meta();
+  $has_encrypted_inventory = ($encryption_meta['status'] ?? 'unencrypted') === 'encrypted_v1' && file_exists($encrypted_inventory_path);
+
   $saved_decks = ptcgdm_collect_saved_entries($dir, $url_base, $saved_args);
   $load_message = empty($saved_decks) ? $load_message_empty : $load_message_ready;
+  if ($has_encrypted_inventory) {
+    $load_message = 'Encrypted inventory found. Unlock in the Security tab to load it.';
+  }
   if ($mode === 'inventory' && empty($auto_load_url) && !empty($saved_decks[0]['url'])) {
     $auto_load_url = $saved_decks[0]['url'];
   }
