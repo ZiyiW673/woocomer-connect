@@ -674,7 +674,15 @@ function ptcgdm_get_admin_ui_content() {
           };
 
           const b64ToBytes = (b64) => Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
-          const bytesToB64 = (bytes) => btoa(String.fromCharCode(...new Uint8Array(bytes)));
+          const bytesToB64 = (bytes) => {
+            const array = bytes instanceof ArrayBuffer ? new Uint8Array(bytes) : new Uint8Array(bytes.buffer || bytes);
+            let binary = '';
+            const chunk = 0x8000;
+            for (let i = 0; i < array.length; i += chunk) {
+              binary += String.fromCharCode(...array.subarray(i, i + chunk));
+            }
+            return btoa(binary);
+          };
 
           const deriveKey = async (password, saltB64, iterations) => {
             const enc = new TextEncoder();
