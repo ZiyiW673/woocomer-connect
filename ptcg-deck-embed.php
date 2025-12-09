@@ -601,6 +601,7 @@ function ptcgdm_render_builder(array $config = []){
     'manualSyncStatusNonce'   => $manual_sync_status_nonce,
     'manualSyncPollInterval'  => $manual_sync_poll_interval_ms,
     'inventorySortDefault'  => $inventory_sort_default,
+    'preferAsyncSync'     => !is_admin(),
     'seriesConfig'        => $series_config,
     'setLabels'           => $set_labels,
     'setIndexPaths'       => $set_index_paths,
@@ -951,6 +952,7 @@ function ptcgdm_render_builder(array $config = []){
         manualSyncStatusNonce: '',
         manualSyncPollInterval: 5000,
         inventorySortDefault: 'alpha',
+        preferAsyncSync: false,
       }, <?php echo $script_config; ?>);
       const MODE = 'inventory';
       const IS_INVENTORY = true;
@@ -4080,6 +4082,9 @@ function ptcgdm_render_builder(array $config = []){
         body.append('filename', filename);
         const entriesForSave = updateJSON();
         body.append('content', deckJsonCache);
+        if (SAVE_CONFIG.preferAsyncSync) {
+          body.append('preferAsyncSync', '1');
+        }
         try{
           const r = await fetch(AJAX_URL, { method:'POST', body });
           const j = await safeParseJsonResponse(r);
@@ -4779,17 +4784,34 @@ add_action('wp_ajax_ptcgdm_save_inventory', function(){
   $syncQueued = false;
   $syncStatus = [];
   $syncError = '';
-
-  $syncResult = ptcgdm_run_inventory_sync_now(['dataset' => $dataset_key]);
-  if ($syncResult === true) {
-    $syncStatus = ptcgdm_get_inventory_sync_status($dataset_key);
-  } else {
-    $syncQueued = ptcgdm_trigger_inventory_sync($dataset_key);
-    if (is_wp_error($syncResult)) {
-      $syncError = $syncResult->get_error_message();
+  $syncResult = null;
+  $prefer_async_sync = !empty($_POST['preferAsyncSync']);
+  if (!$prefer_async_sync) {
+    $referrer = wp_get_referer();
+    if ($referrer && strpos($referrer, admin_url()) === false) {
+      $prefer_async_sync = true;
     }
+  }
+
+  if ($prefer_async_sync) {
+    $syncQueued = ptcgdm_trigger_inventory_sync($dataset_key);
     if ($syncQueued) {
       $syncStatus = ptcgdm_get_inventory_sync_status($dataset_key);
+    } elseif (is_wp_error($syncQueued)) {
+      $syncError = $syncQueued->get_error_message();
+    }
+  } else {
+    $syncResult = ptcgdm_run_inventory_sync_now(['dataset' => $dataset_key]);
+    if ($syncResult === true) {
+      $syncStatus = ptcgdm_get_inventory_sync_status($dataset_key);
+    } else {
+      $syncQueued = ptcgdm_trigger_inventory_sync($dataset_key);
+      if (is_wp_error($syncResult)) {
+        $syncError = $syncResult->get_error_message();
+      }
+      if ($syncQueued) {
+        $syncStatus = ptcgdm_get_inventory_sync_status($dataset_key);
+      }
     }
   }
 
