@@ -9351,14 +9351,26 @@ function ptcgdm_register_encryption_routes() {
       }
 
       $dataset = ptcgdm_normalize_inventory_dataset_key($request->get_param('dataset'));
+      $dir     = ptcgdm_get_inventory_dir();
+      if (!file_exists($dir)) {
+        wp_mkdir_p($dir);
+      }
       $path    = ptcgdm_get_inventory_path_for_dataset($dataset);
       if (!file_exists($path)) {
-        return new WP_Error('not_found', 'Inventory file not found.', ['status' => 404]);
+        return [
+          'dataset' => $dataset,
+          'data'    => '',
+          'missing' => true,
+        ];
       }
 
-      $contents = file_get_contents($path);
+      $contents = @file_get_contents($path);
       if ($contents === false) {
-        return new WP_Error('read_failed', 'Unable to read inventory.', ['status' => 500]);
+        return [
+          'dataset' => $dataset,
+          'data'    => '',
+          'missing' => true,
+        ];
       }
 
       return [
