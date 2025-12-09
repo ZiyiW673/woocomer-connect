@@ -749,6 +749,10 @@ function ptcgdm_get_admin_ui_content() {
               if (res.status === 404) {
                 continue;
               }
+              if (res.status === 403) {
+                await fetchMeta();
+                throw new Error('Inventory already appears encrypted or access was denied. Refresh and unlock instead.');
+              }
               if (!res.ok) {
                 throw new Error(`Could not read existing inventory for ${dataset}.`);
               }
@@ -786,6 +790,12 @@ function ptcgdm_get_admin_ui_content() {
               return;
             }
             try {
+              const latestMeta = await fetchMeta();
+              if (!latestMeta || latestMeta.status === 'encrypted_v1') {
+                setStatus('initial', 'Inventory is already encrypted. Unlock with your password or PIN.', 'error');
+                return;
+              }
+
               setStatus('initial', 'Encrypting inventory…');
               const saltPw = bytesToB64(crypto.getRandomValues(new Uint8Array(16)));
               const pwIterations = 200000;
