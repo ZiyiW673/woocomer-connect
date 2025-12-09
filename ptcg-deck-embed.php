@@ -302,6 +302,25 @@ function ptcgdm_get_encrypted_inventory_path_for_dataset($dataset_key = '') {
   return $dir . $base . '.enc.json';
 }
 
+function ptcgdm_get_encrypted_inventory_candidates($dataset_key = '') {
+  $dir = trailingslashit(ptcgdm_get_inventory_dir());
+  $base = pathinfo(ptcgdm_get_inventory_filename_for_dataset($dataset_key), PATHINFO_FILENAME);
+  return [
+    $dir . $base . '.enc.json',
+    $dir . $base . '.json.enc',
+  ];
+}
+
+function ptcgdm_find_existing_encrypted_inventory_path($dataset_key = '') {
+  $candidates = ptcgdm_get_encrypted_inventory_candidates($dataset_key);
+  foreach ($candidates as $path) {
+    if (file_exists($path)) {
+      return $path;
+    }
+  }
+  return null;
+}
+
 function ptcgdm_get_inventory_url_for_dataset($dataset_key = '') {
   $url = trailingslashit(ptcgdm_get_inventory_url());
   return $url . rawurlencode(ptcgdm_get_inventory_filename_for_dataset($dataset_key));
@@ -528,7 +547,7 @@ function ptcgdm_render_builder(array $config = []){
   $url_base = ptcgdm_get_inventory_url();
   $inventory_filename = ptcgdm_get_inventory_filename_for_dataset($dataset_key);
   $inventory_label = 'Card Inventory';
-  $encrypted_inventory_path = ptcgdm_get_encrypted_inventory_path_for_dataset($dataset_key);
+  $encrypted_inventory_path = ptcgdm_find_existing_encrypted_inventory_path($dataset_key);
   if ($dataset_key === 'one_piece') {
     $inventory_label = 'One Piece Inventory';
   } elseif ($dataset_key !== 'pokemon') {
@@ -564,7 +583,7 @@ function ptcgdm_render_builder(array $config = []){
   }
 
   $encryption_meta = ptcgdm_get_encryption_meta();
-  $has_encrypted_inventory = ($encryption_meta['status'] ?? 'unencrypted') === 'encrypted_v1' && file_exists($encrypted_inventory_path);
+  $has_encrypted_inventory = ($encryption_meta['status'] ?? 'unencrypted') === 'encrypted_v1' && $encrypted_inventory_path && file_exists($encrypted_inventory_path);
 
   $saved_decks = ptcgdm_collect_saved_entries($dir, $url_base, $saved_args);
   $load_message = empty($saved_decks) ? $load_message_empty : $load_message_ready;
@@ -9443,9 +9462,14 @@ function ptcgdm_register_encryption_routes() {
     'methods'  => WP_REST_Server::READABLE,
     'callback' => function (WP_REST_Request $request) {
       $dataset = ptcgdm_normalize_inventory_dataset_key($request->get_param('dataset'));
-      $path    = ptcgdm_get_encrypted_inventory_path_for_dataset($dataset);
-      if (!file_exists($path)) {
+      $path    = ptcgdm_find_existing_encrypted_inventory_path($dataset);
+      if (!$path || !file_exists($path)) {
         return new WP_Error('not_found', 'Encrypted payload not found.', ['status' => 404]);
+      }
+
+      $canonical = ptcgdm_get_encrypted_inventory_path_for_dataset($dataset);
+      if ($canonical !== $path && !file_exists($canonical)) {
+        @copy($path, $canonical);
       }
 
       $contents = file_get_contents($path);
@@ -9492,6 +9516,15 @@ function ptcgdm_register_encryption_routes() {
       $plaintext_path = ptcgdm_get_inventory_path_for_dataset($dataset);
       if (file_exists($plaintext_path)) {
         @unlink($plaintext_path);
+      }
+
+      $legacy_paths = array_filter(ptcgdm_get_encrypted_inventory_candidates($dataset), function ($candidate) use ($path) {
+        return $candidate !== $path;
+      });
+      foreach ($legacy_paths as $legacy) {
+        if (file_exists($legacy)) {
+          @unlink($legacy);
+        }
       }
 
       return [ 'dataset' => $dataset ];
