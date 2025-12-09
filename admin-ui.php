@@ -218,6 +218,20 @@ function ptcgdm_render_admin_orders_panel() {
 }
 
 /**
+ * Render the Admin UI security panel markup.
+ */
+function ptcgdm_render_admin_security_panel() {
+  echo '<div class="wrap ptcgdm-security">';
+  echo '<h2>Security</h2>';
+  echo '<div class="ptcgdm-security__field">';
+  echo '<label for="ptcgdm-security-password">Encryption password</label>';
+  echo '<input type="password" id="ptcgdm-security-password" name="ptcgdm-security-password" class="ptcgdm-security__input" placeholder="Enter password" />';
+  echo '</div>';
+  echo '<button type="button" class="ptcgdm-security__encrypt">Encrypt</button>';
+  echo '</div>';
+}
+
+/**
  * Build the inventory management markup for the public page/shortcode.
  *
  * @return string
@@ -240,6 +254,10 @@ function ptcgdm_get_admin_ui_content() {
       'label'   => 'Orders',
       'content' => ptcgdm_capture_admin_ui_panel('ptcgdm_render_admin_orders_panel'),
     ],
+    'security' => [
+      'label'   => 'Security',
+      'content' => ptcgdm_capture_admin_ui_panel('ptcgdm_render_admin_security_panel'),
+    ],
   ];
 
   ob_start();
@@ -258,6 +276,10 @@ function ptcgdm_get_admin_ui_content() {
       .ptcgdm-admin-ui__frame { width: 100%; min-height: 900px; border: 1px solid #1f2533; border-radius: 12px; background: #0f1218; }
       .ptcgdm-admin-ui__panel { display: none; }
       .ptcgdm-admin-ui__panel.is-active { display: block; }
+      .ptcgdm-security { background: #0f1218; border: 1px solid #1f2533; border-radius: 12px; padding: 16px; color: #cfd6e6; }
+      .ptcgdm-security__field { margin-bottom: 12px; display: flex; flex-direction: column; gap: 6px; }
+      .ptcgdm-security__input { background: #0c101a; border: 1px solid #324061; border-radius: 8px; padding: 10px 12px; color: #fff; }
+      .ptcgdm-security__encrypt { background: #1b2034; border: 1px solid #324061; color: #fff; padding: 10px 12px; border-radius: 10px; cursor: pointer; font-weight: 700; }
       .ptcgdm-orders__list { display: none; }
       .ptcgdm-orders__list.is-active, .ptcgdm-orders__detail-panel.is-active { display: block; }
       .ptcgdm-orders__detail-panel { display: none; background: #0f1218; border: 1px solid #1f2533; border-radius: 12px; padding: 16px; color: #cfd6e6; }
