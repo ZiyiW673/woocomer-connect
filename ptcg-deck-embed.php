@@ -4752,11 +4752,13 @@ function ptcgdm_render_builder(array $config = []){
           let textToParse = cleaned;
 
           try {
-            if (window.parent && window.parent !== window) {
-              const enc = window.parent.ptcgdmEncryption;
-              if (enc && enc.status === 'encrypted_v1' && typeof enc.decryptInventoryText === 'function') {
-                textToParse = await enc.decryptInventoryText(cleaned);
-              } else if (enc && enc.status === 'encrypted_v1_locked') {
+            const parentWin = window.parent && window.parent !== window ? window.parent : window;
+            const helper = parentWin.ptcgdmInventoryCrypto || parentWin.ptcgdmEncryption;
+            if (helper && typeof helper.decryptInventoryText === 'function') {
+              const unlocked = helper.isUnlocked === undefined ? (helper.status === 'encrypted_v1' || helper.status === 'plaintext') : !!helper.isUnlocked;
+              if (unlocked) {
+                textToParse = await helper.decryptInventoryText(cleaned, { url, isInventory: !!IS_INVENTORY });
+              } else if (helper.status === 'encrypted_v1_locked') {
                 throw new Error('Deck is encrypted. Please unlock it in the Security tab.');
               }
             }

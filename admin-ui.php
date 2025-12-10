@@ -658,20 +658,32 @@ function ptcgdm_get_admin_ui_content() {
           const syncEncryptionHelper = () => {
             if (metadata && metadata.status === 'encrypted_v1') {
               if (masterKey) {
+                const decryptInventoryText = async (cipherText) => {
+                  let blob;
+                  try {
+                    blob = JSON.parse(cipherText);
+                  } catch (err) {
+                    throw new Error('Encrypted inventory payload is invalid.');
+                  }
+                  if (!blob || typeof blob.iv !== 'string' || typeof blob.data !== 'string') {
+                    throw new Error('Encrypted inventory payload is invalid.');
+                  }
+                  const decrypted = await decryptWithKey(masterKey, blob);
+                  return new TextDecoder().decode(decrypted);
+                };
+
                 window.ptcgdmEncryption = {
                   status: 'encrypted_v1',
                   async decryptInventoryText(cipherText) {
-                    let blob;
-                    try {
-                      blob = JSON.parse(cipherText);
-                    } catch (err) {
-                      throw new Error('Encrypted inventory payload is invalid.');
-                    }
-                    if (!blob || typeof blob.iv !== 'string' || typeof blob.data !== 'string') {
-                      throw new Error('Encrypted inventory payload is invalid.');
-                    }
-                    const decrypted = await decryptWithKey(masterKey, blob);
-                    return new TextDecoder().decode(decrypted);
+                    return decryptInventoryText(cipherText);
+                  },
+                };
+
+                window.ptcgdmInventoryCrypto = {
+                  status: 'encrypted_v1',
+                  isUnlocked: true,
+                  async decryptInventoryText(cipherText) {
+                    return decryptInventoryText(cipherText);
                   },
                 };
               } else {
@@ -679,6 +691,14 @@ function ptcgdm_get_admin_ui_content() {
                   status: 'encrypted_v1_locked',
                   async decryptInventoryText() {
                     throw new Error('Deck is encrypted. Please unlock it in the Security tab.');
+                  },
+                };
+
+                window.ptcgdmInventoryCrypto = {
+                  status: 'encrypted_v1_locked',
+                  isUnlocked: false,
+                  async decryptInventoryText() {
+                    throw new Error('Inventory is encrypted. Please unlock it in the Security tab.');
                   },
                 };
               }
@@ -689,8 +709,21 @@ function ptcgdm_get_admin_ui_content() {
                   return plainText;
                 },
               };
-            } else if (window.ptcgdmEncryption) {
-              delete window.ptcgdmEncryption;
+
+              window.ptcgdmInventoryCrypto = {
+                status: 'plaintext',
+                isUnlocked: true,
+                async decryptInventoryText(plainText) {
+                  return plainText;
+                },
+              };
+            } else {
+              if (window.ptcgdmEncryption) {
+                delete window.ptcgdmEncryption;
+              }
+              if (window.ptcgdmInventoryCrypto) {
+                delete window.ptcgdmInventoryCrypto;
+              }
             }
           };
           const emitBridgeUpdate = () => {
