@@ -4256,6 +4256,10 @@ function ptcgdm_render_builder(array $config = []){
           payload.append('action', action);
           payload.append('nonce', nonce);
           payload.append('datasetKey', DATASET_KEY);
+          updateJSON();
+          if (typeof deckJsonCache === 'string' && deckJsonCache.trim()) {
+            payload.append('content', deckJsonCache);
+          }
           const response = await fetch(AJAX_URL, { method: 'POST', body: payload });
           const result = await safeParseJsonResponse(response);
           if (!response.ok || !result?.success) {
@@ -5180,6 +5184,21 @@ add_action('wp_ajax_ptcgdm_manual_inventory_sync', function(){
   check_ajax_referer('ptcgdm_manual_inventory_sync', 'nonce');
 
   $dataset_key = ptcgdm_resolve_inventory_dataset_key($_POST);
+  $raw_content = isset($_POST['content']) ? wp_unslash((string) $_POST['content']) : '';
+  $entries_override = null;
+  if ($raw_content !== '') {
+    $entries_override = ptcgdm_extract_inventory_entries_for_sync($raw_content);
+    if ($entries_override === null) {
+      wp_send_json_error(['message' => __('Inventory payload is invalid.', 'ptcgdm')]);
+    }
+  }
+
+  $meta = ptcgdm_get_encryption_meta();
+  $encrypted_at_rest = isset($meta['status']) && $meta['status'] === 'encrypted_v1';
+
+  if ($encrypted_at_rest && $entries_override === null) {
+    wp_send_json_error(['message' => __('Inventory is encrypted. Please unlock and sync from an unlocked browser session.', 'ptcgdm')]);
+  }
 
   if (ptcgdm_is_inventory_syncing()) {
     $status = ptcgdm_get_inventory_sync_status($dataset_key);
@@ -5192,22 +5211,31 @@ add_action('wp_ajax_ptcgdm_manual_inventory_sync', function(){
 
   $run_id = ptcgdm_generate_inventory_sync_run_id();
   $queued_message = __('Inventory sync queued. WooCommerce products will update shortly.', 'ptcgdm');
-  ptcgdm_set_inventory_sync_status('queued', $queued_message, ptcgdm_build_inventory_sync_status_extra($run_id, [
-    'result' => '',
-    'dataset' => $dataset_key,
-  ]), $dataset_key);
 
-  $syncQueued = ptcgdm_trigger_inventory_sync($dataset_key);
-  if ($syncQueued) {
-    wp_send_json_success([
-      'queued'  => true,
-      'syncQueued' => true,
-      'message' => $queued_message,
-      'status'  => ptcgdm_get_inventory_sync_status($dataset_key),
-    ]);
+  $syncQueued = false;
+  if ($entries_override === null) {
+    ptcgdm_set_inventory_sync_status('queued', $queued_message, ptcgdm_build_inventory_sync_status_extra($run_id, [
+      'result' => '',
+      'dataset' => $dataset_key,
+    ]), $dataset_key);
+
+    $syncQueued = ptcgdm_trigger_inventory_sync($dataset_key);
+    if ($syncQueued) {
+      wp_send_json_success([
+        'queued'  => true,
+        'syncQueued' => true,
+        'message' => $queued_message,
+        'status'  => ptcgdm_get_inventory_sync_status($dataset_key),
+      ]);
+    }
   }
 
-  $result = ptcgdm_run_inventory_sync_now(['run_id' => $run_id, 'dataset' => $dataset_key]);
+  $sync_args = ['run_id' => $run_id, 'dataset' => $dataset_key];
+  if (is_array($entries_override)) {
+    $sync_args['entries'] = $entries_override;
+  }
+
+  $result = ptcgdm_run_inventory_sync_now($sync_args);
 
   if ($result === true) {
     $status = ptcgdm_get_inventory_sync_status($dataset_key);
@@ -7416,6 +7444,42 @@ function ptcgdm_prepare_inventory_sync_environment() {
   }
 }
 
+/**
+ * Extract inventory entries for a sync run from a payload.
+ *
+ * @param mixed $payload JSON string or PHP array containing inventory data.
+ *
+ * @return array|null List of entries or null when invalid.
+ */
+function ptcgdm_extract_inventory_entries_for_sync($payload) {
+  if (is_string($payload)) {
+    $payload = trim((string) $payload);
+    if ($payload === '') {
+      return [];
+    }
+
+    $decoded = json_decode($payload, true);
+    if (!is_array($decoded)) {
+      return null;
+    }
+    $payload = $decoded;
+  }
+
+  if (!is_array($payload)) {
+    return null;
+  }
+
+  if (isset($payload['cards']) && is_array($payload['cards'])) {
+    return $payload['cards'];
+  }
+
+  if (ptcgdm_is_list($payload)) {
+    return $payload;
+  }
+
+  return null;
+}
+
 function ptcgdm_run_inventory_sync_now($args = []) {
   if (ptcgdm_is_inventory_syncing()) {
     return new WP_Error('ptcgdm_sync_running', __('Inventory sync is already running. Please wait for it to finish.', 'ptcgdm'));
@@ -7427,6 +7491,17 @@ function ptcgdm_run_inventory_sync_now($args = []) {
   $dataset_key = ptcgdm_resolve_inventory_dataset_key($args);
   ptcgdm_set_active_inventory_dataset($dataset_key);
 
+  $provided_entries = null;
+  $has_entries_override = false;
+
+  if (array_key_exists('entries', $args)) {
+    $provided_entries = ptcgdm_extract_inventory_entries_for_sync($args['entries']);
+    $has_entries_override = is_array($provided_entries);
+  } elseif (array_key_exists('content', $args)) {
+    $provided_entries = ptcgdm_extract_inventory_entries_for_sync($args['content']);
+    $has_entries_override = is_array($provided_entries);
+  }
+
   ptcgdm_set_inventory_sync_status('running', __('Inventory sync is running…', 'ptcgdm'), ptcgdm_build_inventory_sync_status_extra($run_id, [
     'result' => '',
     'dataset' => $dataset_key,
@@ -7436,52 +7511,64 @@ function ptcgdm_run_inventory_sync_now($args = []) {
 
   $dir = trailingslashit(ptcgdm_get_inventory_dir());
   $path = ptcgdm_get_inventory_path_for_dataset($dataset_key);
+  $meta = ptcgdm_get_encryption_meta();
+  $encrypted_at_rest = isset($meta['status']) && $meta['status'] === 'encrypted_v1';
 
-  if (!file_exists($path)) {
-    ptcgdm_set_inventory_sync_status('error', __('No saved inventory snapshot was found. Please save your inventory first.', 'ptcgdm'), ptcgdm_build_inventory_sync_status_extra($run_id, [
-      'result' => 'error',
-      'dataset' => $dataset_key,
-    ]), $dataset_key);
-    return new WP_Error('ptcgdm_sync_missing', __('No saved inventory snapshot was found. Please save your inventory first.', 'ptcgdm'));
-  }
-
-  if (!is_readable($path)) {
-    ptcgdm_set_inventory_sync_status('error', __('Inventory snapshot is not readable.', 'ptcgdm'), ptcgdm_build_inventory_sync_status_extra($run_id, [
-      'result' => 'error',
-      'dataset' => $dataset_key,
-    ]), $dataset_key);
-    return new WP_Error('ptcgdm_sync_unreadable', __('Inventory snapshot is not readable.', 'ptcgdm'));
-  }
-
-  ptcgdm_create_inventory_backup($dataset_key);
-
-  $raw = @file_get_contents($path);
-  if ($raw === false) {
-    ptcgdm_set_inventory_sync_status('error', __('Unable to read the inventory snapshot.', 'ptcgdm'), ptcgdm_build_inventory_sync_status_extra($run_id, [
-      'result' => 'error',
-      'dataset' => $dataset_key,
-    ]), $dataset_key);
-    return new WP_Error('ptcgdm_sync_read_error', __('Unable to read the inventory snapshot.', 'ptcgdm'));
-  }
-
-  $raw = trim((string) $raw);
+  $data = null;
   $sync_summary = ['processed' => 0, 'total' => 0];
-  if ($raw === '') {
-    $sync_summary = ptcgdm_sync_inventory_products([], ['run_id' => $run_id, 'dataset' => $dataset_key]);
-    $processed = isset($sync_summary['processed']) ? (int) $sync_summary['processed'] : 0;
-    $total = isset($sync_summary['total']) ? (int) $sync_summary['total'] : 0;
-    ptcgdm_set_inventory_sync_status('success', __('Inventory sync completed successfully.', 'ptcgdm'), ptcgdm_build_inventory_sync_status_extra($run_id, [
-      'result' => 'success',
-      'processed_count' => $processed,
-      'total_count' => $total,
-      'card_index' => $processed,
-      'current_card_label' => '',
-      'dataset' => $dataset_key,
-    ]), $dataset_key);
-    return true;
+
+  if ($has_entries_override) {
+    $data = ['cards' => $provided_entries];
+  } else {
+    if (!file_exists($path)) {
+      $message = $encrypted_at_rest
+        ? __('Encrypted inventory is unlocked in the browser but no plaintext snapshot is available. Please unlock and re-save before syncing.', 'ptcgdm')
+        : __('No saved inventory snapshot was found. Please save your inventory first.', 'ptcgdm');
+      ptcgdm_set_inventory_sync_status('error', $message, ptcgdm_build_inventory_sync_status_extra($run_id, [
+        'result' => 'error',
+        'dataset' => $dataset_key,
+      ]), $dataset_key);
+      return new WP_Error('ptcgdm_sync_missing', $message);
+    }
+
+    if (!is_readable($path)) {
+      ptcgdm_set_inventory_sync_status('error', __('Inventory snapshot is not readable.', 'ptcgdm'), ptcgdm_build_inventory_sync_status_extra($run_id, [
+        'result' => 'error',
+        'dataset' => $dataset_key,
+      ]), $dataset_key);
+      return new WP_Error('ptcgdm_sync_unreadable', __('Inventory snapshot is not readable.', 'ptcgdm'));
+    }
+
+    ptcgdm_create_inventory_backup($dataset_key);
+
+    $raw = @file_get_contents($path);
+    if ($raw === false) {
+      ptcgdm_set_inventory_sync_status('error', __('Unable to read the inventory snapshot.', 'ptcgdm'), ptcgdm_build_inventory_sync_status_extra($run_id, [
+        'result' => 'error',
+        'dataset' => $dataset_key,
+      ]), $dataset_key);
+      return new WP_Error('ptcgdm_sync_read_error', __('Unable to read the inventory snapshot.', 'ptcgdm'));
+    }
+
+    $raw = trim((string) $raw);
+    if ($raw === '') {
+      $sync_summary = ptcgdm_sync_inventory_products([], ['run_id' => $run_id, 'dataset' => $dataset_key]);
+      $processed = isset($sync_summary['processed']) ? (int) $sync_summary['processed'] : 0;
+      $total = isset($sync_summary['total']) ? (int) $sync_summary['total'] : 0;
+      ptcgdm_set_inventory_sync_status('success', __('Inventory sync completed successfully.', 'ptcgdm'), ptcgdm_build_inventory_sync_status_extra($run_id, [
+        'result' => 'success',
+        'processed_count' => $processed,
+        'total_count' => $total,
+        'card_index' => $processed,
+        'current_card_label' => '',
+        'dataset' => $dataset_key,
+      ]), $dataset_key);
+      return true;
+    }
+
+    $data = json_decode($raw, true);
   }
 
-  $data = json_decode($raw, true);
   if (!is_array($data)) {
     ptcgdm_set_inventory_sync_status('error', __('Inventory snapshot contains invalid data.', 'ptcgdm'), ptcgdm_build_inventory_sync_status_extra($run_id, [
       'result' => 'error',
@@ -7493,6 +7580,8 @@ function ptcgdm_run_inventory_sync_now($args = []) {
   $entries = [];
   if (!empty($data['cards']) && is_array($data['cards'])) {
     $entries = $data['cards'];
+  } elseif ($has_entries_override && is_array($provided_entries)) {
+    $entries = $provided_entries;
   }
 
   try {
