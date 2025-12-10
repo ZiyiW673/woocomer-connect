@@ -236,17 +236,8 @@ function ptcgdm_render_admin_security_panel() {
   echo '<div class="ptcgdm-security__section" data-section="password">';
   echo '<h3>Password unlock</h3>';
   echo '<div class="ptcgdm-security__field"><label for="ptcgdm-security-password-unlock">Password</label><input type="password" id="ptcgdm-security-password-unlock" class="ptcgdm-security__input" autocomplete="current-password" /></div>';
-  echo '<label class="ptcgdm-security__checkbox"><input type="checkbox" id="ptcgdm-security-remember-pin" /> Remember on this device with a PIN</label>';
-  echo '<div class="ptcgdm-security__field" data-pin-wrapper="1" hidden><label for="ptcgdm-security-pin-create">PIN</label><input type="password" id="ptcgdm-security-pin-create" class="ptcgdm-security__input" inputmode="numeric" pattern="[0-9]*" autocomplete="off" /></div>';
   echo '<button type="button" class="ptcgdm-security__button" data-action="unlock-password">Verify password / Unlock</button>';
   echo '<div class="ptcgdm-security__status" data-status="password" aria-live="polite"></div>';
-  echo '</div>';
-
-  echo '<div class="ptcgdm-security__section" data-section="pin">';
-  echo '<h3>PIN unlock</h3>';
-  echo '<div class="ptcgdm-security__field"><label for="ptcgdm-security-pin-unlock">PIN</label><input type="password" id="ptcgdm-security-pin-unlock" class="ptcgdm-security__input" inputmode="numeric" pattern="[0-9]*" autocomplete="off" /></div>';
-  echo '<button type="button" class="ptcgdm-security__button" data-action="unlock-pin">Unlock with PIN</button>';
-  echo '<div class="ptcgdm-security__status" data-status="pin" aria-live="polite"></div>';
   echo '</div>';
 
   echo '<div class="ptcgdm-security__section" data-section="recovery">';
@@ -626,10 +617,6 @@ function ptcgdm_get_admin_ui_content() {
           const passwordInput = securityRoot.querySelector('#ptcgdm-security-password');
           const passwordConfirmInput = securityRoot.querySelector('#ptcgdm-security-password-confirm');
           const unlockPasswordInput = securityRoot.querySelector('#ptcgdm-security-password-unlock');
-          const rememberCheckbox = securityRoot.querySelector('#ptcgdm-security-remember-pin');
-          const pinCreateWrapper = securityRoot.querySelector('[data-pin-wrapper]');
-          const pinCreateInput = securityRoot.querySelector('#ptcgdm-security-pin-create');
-          const pinUnlockInput = securityRoot.querySelector('#ptcgdm-security-pin-unlock');
           const statuses = securityRoot.querySelectorAll('.ptcgdm-security__status');
           const recoveryUpload = securityRoot.querySelector('input[data-action="upload-recovery"]');
           const recoveryDownloadButton = securityRoot.querySelector('[data-action="download-recovery"]');
@@ -766,9 +753,6 @@ function ptcgdm_get_admin_ui_content() {
                 section.hidden = status === 'encrypted_v1';
               } else if (id === 'password' || id === 'recovery') {
                 section.hidden = status !== 'encrypted_v1';
-              } else if (id === 'pin') {
-                const hasPin = !!window.localStorage.getItem('ptcgdm_zk_master_pin_blob');
-                section.hidden = status !== 'encrypted_v1' || !hasPin;
               }
             });
 
@@ -950,7 +934,7 @@ function ptcgdm_get_admin_ui_content() {
             try {
               const latestMeta = await fetchMeta();
               if (!latestMeta || latestMeta.status === 'encrypted_v1') {
-                setStatus('initial', 'Inventory is already encrypted. Unlock with your password or PIN.', 'error');
+                setStatus('initial', 'Inventory is already encrypted. Unlock with your password.', 'error');
                 return;
               }
 
@@ -997,15 +981,6 @@ function ptcgdm_get_admin_ui_content() {
               setMasterKey(imported);
               await loadVerifier(masterKey);
 
-              if (rememberCheckbox.checked) {
-                const pinValue = (pinCreateInput.value || '').trim();
-                if (!pinValue) throw new Error('PIN is required to remember on this device.');
-                const saltPin = bytesToB64(crypto.getRandomValues(new Uint8Array(16)));
-                const pinKey = await deriveKey(pinValue, saltPin, 50000);
-                const wrappedMasterPin = await encryptWithKey(pinKey, await crypto.subtle.exportKey('raw', masterKey));
-                window.localStorage.setItem('ptcgdm_zk_master_pin_blob', JSON.stringify({ salt_pin: saltPin, wrapped_master_pin: wrappedMasterPin }));
-              }
-
               setStatus('password', 'Unlocked.', 'success');
               toggleSections();
             } catch (err) {
@@ -1014,38 +989,9 @@ function ptcgdm_get_admin_ui_content() {
             }
           };
 
-          const unlockWithPin = async () => {
-            const latestMeta = await requireEncryptedMeta('pin');
-            if (!latestMeta) return;
-
-            const blobRaw = window.localStorage.getItem('ptcgdm_zk_master_pin_blob');
-            if (!blobRaw) {
-              setStatus('pin', 'No PIN is stored on this device.', 'error');
-              return;
-            }
-            const pinValue = (pinUnlockInput.value || '').trim();
-            if (!pinValue) {
-              setStatus('pin', 'PIN is required.', 'error');
-              return;
-            }
-            try {
-              const pinData = JSON.parse(blobRaw);
-              const pinKey = await deriveKey(pinValue, pinData.salt_pin, 50000);
-              const rawMaster = await decryptWithKey(pinKey, pinData.wrapped_master_pin);
-              const imported = await crypto.subtle.importKey('raw', rawMaster, { name: 'AES-GCM' }, true, ['encrypt', 'decrypt']);
-              setMasterKey(imported);
-              await loadVerifier(masterKey);
-              setStatus('pin', 'Unlocked with PIN.', 'success');
-              toggleSections();
-            } catch (err) {
-              setMasterKey(null);
-              setStatus('pin', 'Wrong PIN or local key is corrupted.', 'error');
-            }
-          };
-
           const downloadRecovery = async () => {
             if (!masterKey) {
-              setStatus('recovery', 'Unlock with your password or PIN first.', 'error');
+              setStatus('recovery', 'Unlock with your password first.', 'error');
               return;
             }
             const raw = await crypto.subtle.exportKey('raw', masterKey);
@@ -1082,7 +1028,7 @@ function ptcgdm_get_admin_ui_content() {
 
           const resetPasswordWithRecovery = async () => {
             if (!masterKey) {
-              setStatus('recovery', 'Unlock with your password, PIN, or recovery key first.', 'error');
+              setStatus('recovery', 'Unlock with your password or recovery key first.', 'error');
               return;
             }
 
@@ -1126,19 +1072,12 @@ function ptcgdm_get_admin_ui_content() {
               performInitialEncrypt();
             } else if (action === 'unlock-password') {
               unlockWithPassword();
-            } else if (action === 'unlock-pin') {
-              unlockWithPin();
             } else if (action === 'download-recovery') {
               downloadRecovery();
             } else if (action === 'reset-password') {
               resetPasswordWithRecovery();
             }
           };
-
-          rememberCheckbox.addEventListener('change', () => {
-            if (!pinCreateWrapper) return;
-            pinCreateWrapper.hidden = !rememberCheckbox.checked;
-          });
 
           securityRoot.addEventListener('click', handleActionClick);
 
