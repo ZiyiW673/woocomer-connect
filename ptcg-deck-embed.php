@@ -4749,9 +4749,23 @@ function ptcgdm_render_builder(array $config = []){
           const text = await response.text();
           const cleaned = text.replace(/^\uFEFF/, '').trim();
           if (!cleaned) throw new Error('File is empty');
+          let textToParse = cleaned;
+
+          try {
+            if (window.parent && window.parent !== window) {
+              const enc = window.parent.ptcgdmEncryption;
+              if (enc && enc.status === 'encrypted_v1' && typeof enc.decryptInventoryText === 'function') {
+                textToParse = await enc.decryptInventoryText(cleaned);
+              } else if (enc && enc.status === 'encrypted_v1_locked') {
+                throw new Error('Deck is encrypted. Please unlock it in the Security tab.');
+              }
+            }
+          } catch (e) {
+            throw new Error(e && e.message ? e.message : 'Deck is encrypted. Please unlock it in the Security tab.');
+          }
           let data;
           try {
-            data = JSON.parse(cleaned);
+            data = JSON.parse(textToParse);
           } catch (err) {
             throw new Error('Invalid JSON');
           }

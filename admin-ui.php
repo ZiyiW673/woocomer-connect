@@ -655,8 +655,47 @@ function ptcgdm_get_admin_ui_content() {
               zkBridge.listeners.push(callback);
             }
           };
+          const syncEncryptionHelper = () => {
+            if (metadata && metadata.status === 'encrypted_v1') {
+              if (masterKey) {
+                window.ptcgdmEncryption = {
+                  status: 'encrypted_v1',
+                  async decryptInventoryText(cipherText) {
+                    let blob;
+                    try {
+                      blob = JSON.parse(cipherText);
+                    } catch (err) {
+                      throw new Error('Encrypted inventory payload is invalid.');
+                    }
+                    if (!blob || typeof blob.iv !== 'string' || typeof blob.data !== 'string') {
+                      throw new Error('Encrypted inventory payload is invalid.');
+                    }
+                    const decrypted = await decryptWithKey(masterKey, blob);
+                    return new TextDecoder().decode(decrypted);
+                  },
+                };
+              } else {
+                window.ptcgdmEncryption = {
+                  status: 'encrypted_v1_locked',
+                  async decryptInventoryText() {
+                    throw new Error('Deck is encrypted. Please unlock it in the Security tab.');
+                  },
+                };
+              }
+            } else if (metadata && metadata.status) {
+              window.ptcgdmEncryption = {
+                status: 'plaintext',
+                async decryptInventoryText(plainText) {
+                  return plainText;
+                },
+              };
+            } else if (window.ptcgdmEncryption) {
+              delete window.ptcgdmEncryption;
+            }
+          };
           const emitBridgeUpdate = () => {
             zkBridge.metadata = metadata;
+            syncEncryptionHelper();
             (zkBridge.listeners || []).forEach((fn) => {
               try {
                 fn({ hasMasterKey: !!masterKey, metadata });
