@@ -461,6 +461,14 @@ add_action('admin_menu', function () {
   );
 });
 
+add_action('admin_menu', function () {
+  $parent_slug = 'ptcg-inventory-management';
+
+  remove_menu_page($parent_slug);
+  remove_submenu_page($parent_slug, $parent_slug);
+  remove_submenu_page($parent_slug, 'ptcg-one-piece-inventory');
+}, 999);
+
 function ptcgdm_collect_saved_entries($dir, $url_base, array $args = []) {
   $args = wp_parse_args($args, [
     'pattern'   => '*.json',
