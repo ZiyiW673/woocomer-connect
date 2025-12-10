@@ -979,7 +979,7 @@ function ptcgdm_render_builder(array $config = []){
       const DATA_BASE = '<?php echo $data_base_url; ?>'; // plugin asset URL
       const SAVE_NONCE = '<?php echo esc_js($nonce); ?>';
       const AJAX_URL = '<?php echo admin_url('admin-ajax.php'); ?>';
-      const API_BASE = `${window.location.origin.replace(/\/$/, '')}/wp-json/ptcgdm/v1`;
+      const API_BASE = '<?php echo esc_url_raw( rtrim( rest_url('ptcgdm/v1'), '/' ) ); ?>';
       const REST_NONCE = '<?php echo esc_js(wp_create_nonce('wp_rest')); ?>';
       const withRestNonce = (headers = {}) => REST_NONCE ? { ...headers, 'X-WP-Nonce': REST_NONCE } : headers;
       const SAVE_CONFIG = Object.assign({
