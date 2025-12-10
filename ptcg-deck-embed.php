@@ -4126,40 +4126,75 @@ function ptcgdm_render_builder(array $config = []){
             filename = safeBase + pattern;
           }
         }
+        const entriesForSave = updateJSON();
+        const plaintextContent = deckJsonCache;
+        const meta = await fetchEncryptionMetaCached();
+        const parentHelper = (window.parent && window.parent !== window ? window.parent.ptcgdmInventoryCrypto : null) || window.ptcgdmInventoryCrypto || null;
+        const helperStatus = parentHelper && typeof parentHelper.status === 'string' ? parentHelper.status : '';
+        const encryptedMode = IS_INVENTORY && ((meta && meta.status === 'encrypted_v1') || helperStatus === 'encrypted_v1' || helperStatus === 'encrypted_v1_locked');
         const body=new FormData();
         body.append('action', SAVE_CONFIG.saveAction || 'ptcgdm_save_inventory');
         body.append('nonce', SAVE_NONCE);
         body.append('datasetKey', DATASET_KEY);
         body.append('filename', filename);
-        const entriesForSave = updateJSON();
-        body.append('content', deckJsonCache);
+        body.append('content', plaintextContent);
         if (SAVE_CONFIG.preferAsyncSync) {
           body.append('preferAsyncSync', '1');
         }
         try{
-          const r = await fetch(AJAX_URL, { method:'POST', body });
-          const j = await safeParseJsonResponse(r);
-          if (!r.ok || !j?.success) throw new Error(resolveResponseError(j, r));
+          let responseData = null;
+          if (encryptedMode) {
+            const masterKey = await getMasterKeyFromBridge(['encrypt','decrypt']);
+            if (!masterKey) {
+              throw new Error('Inventory is encrypted. Please unlock it in the Security tab before saving.');
+            }
+            const encryptedBlob = await encryptBlobWithKey(masterKey, new TextEncoder().encode(plaintextContent));
+            const res = await fetch(`${API_BASE}/encrypted-inventory`, {
+              method: 'POST',
+              credentials: 'include',
+              headers: withRestNonce({ 'Content-Type': 'application/json' }),
+              body: JSON.stringify({ dataset: DATASET_KEY, blob: encryptedBlob }),
+            });
+            if (!res.ok) {
+              let detail = '';
+              try {
+                detail = await res.text();
+              } catch (err) {
+                detail = '';
+              }
+              const suffix = detail ? ` (${detail.trim()})` : '';
+              throw new Error(`Failed to save encrypted inventory.${suffix}`);
+            }
+            responseData = { url: SAVE_CONFIG.autoLoadUrl || '', dataset: DATASET_KEY, encrypted: true };
+          } else {
+            const r = await fetch(AJAX_URL, { method:'POST', body });
+            const j = await safeParseJsonResponse(r);
+            if (!r.ok || !j?.success) throw new Error(resolveResponseError(j, r));
+            responseData = j.data || {};
+          }
           const displayName = getDeckNameValue();
           if (!IS_INVENTORY) {
-            ensureSavedDeckOption(j.data?.url || '', filename, displayName);
+            ensureSavedDeckOption(responseData?.url || '', filename, displayName);
           }
           const success = SAVE_CONFIG.successMessage || 'Saved!\n';
-          const url = j.data?.url || '';
+          const url = responseData?.url || '';
           let extraNotice = '';
           if (IS_INVENTORY) {
-            const syncStatus = j.data?.syncStatus;
-            if (j.data?.synced) {
+            const syncStatus = responseData?.syncStatus;
+            if (responseData?.synced) {
               const syncMsg = (syncStatus && syncStatus.message) ? syncStatus.message : 'Inventory synced to WooCommerce.';
               extraNotice = `\n${syncMsg}`;
               renderSaveProgress(syncMsg);
-            } else if (j.data?.syncQueued) {
+            } else if (responseData?.syncQueued) {
               const queuedMsg = (syncStatus && syncStatus.message) ? syncStatus.message : 'Inventory sync queued in background.';
               extraNotice = `\n${queuedMsg}`;
               renderSaveProgress(queuedMsg);
-            } else if (j.data?.syncError) {
-              extraNotice = `\nSync warning: ${j.data.syncError}`;
-              renderSaveProgress(j.data.syncError);
+            } else if (responseData?.syncError) {
+              extraNotice = `\nSync warning: ${responseData.syncError}`;
+              renderSaveProgress(responseData.syncError);
+            } else if (encryptedMode) {
+              renderSaveProgress('Encrypted inventory saved.');
+              extraNotice = '\nEncrypted inventory saved.';
             } else if (syncStatus && syncStatus.message) {
               renderSaveProgress(syncStatus.message);
             }
@@ -4587,6 +4622,15 @@ function ptcgdm_render_builder(array $config = []){
         }
         return bytes;
       }
+      function bytesToB64Chunked(bytes){
+        const array = bytes instanceof ArrayBuffer ? new Uint8Array(bytes) : new Uint8Array(bytes.buffer || bytes);
+        let binary = '';
+        const chunk = 0x8000;
+        for (let i = 0; i < array.length; i += chunk) {
+          binary += String.fromCharCode(...array.subarray(i, i + chunk));
+        }
+        return btoa(binary);
+      }
       async function decryptBlobWithKey(key, blob){
         if (!blob || !blob.iv || !blob.data) {
           throw new Error('Encrypted payload missing.');
@@ -4594,6 +4638,11 @@ function ptcgdm_render_builder(array $config = []){
         const iv = b64ToBytesSafe(blob.iv);
         const data = b64ToBytesSafe(blob.data);
         return crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, data);
+      }
+      async function encryptBlobWithKey(key, dataBytes){
+        const iv = crypto.getRandomValues(new Uint8Array(12));
+        const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, dataBytes);
+        return { iv: bytesToB64Chunked(iv), data: bytesToB64Chunked(ciphertext) };
       }
       const resolveZkBridge = () => {
         const bridge = (window.parent && window.parent.ptcgdmZkBridge)
@@ -4624,12 +4673,12 @@ function ptcgdm_render_builder(array $config = []){
         }
         return encryptionMeta;
       }
-      async function getMasterKeyFromBridge(){
+      async function getMasterKeyFromBridge(usages = ['decrypt']){
         const bridge = resolveZkBridge();
         if (!bridge || typeof bridge.getMasterKeyBytes !== 'function') return null;
         const raw = await bridge.getMasterKeyBytes();
         if (!raw || !raw.byteLength) return null;
-        return crypto.subtle.importKey('raw', raw, { name: 'AES-GCM' }, true, ['decrypt']);
+        return crypto.subtle.importKey('raw', raw, { name: 'AES-GCM' }, true, usages);
       }
       async function loadEncryptedInventory(masterKey){
         const res = await fetch(`${API_BASE}/encrypted-inventory?dataset=${encodeURIComponent(DATASET_KEY)}`, {
@@ -4980,6 +5029,11 @@ function ptcgdm_render_builder(array $config = []){
 add_action('wp_ajax_ptcgdm_save_inventory', function(){
   if (!current_user_can('manage_options')) wp_send_json_error('Permission denied', 403);
   check_ajax_referer('ptcgdm_save_inventory', 'nonce');
+
+  $meta = ptcgdm_get_encryption_meta();
+  if (($meta['status'] ?? 'unencrypted') === 'encrypted_v1') {
+    wp_send_json_error('Inventory is encrypted. Please unlock and save from the Security tab.', 403);
+  }
 
   $dataset_key = ptcgdm_resolve_inventory_dataset_key($_POST);
 
