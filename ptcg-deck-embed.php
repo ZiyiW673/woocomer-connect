@@ -1032,6 +1032,21 @@ function ptcgdm_render_builder(array $config = []){
       let encryptionMeta = null;
       let encryptedInventoryLoaded = false;
       let encryptedLoadInFlight = false;
+      const getInventoryCryptoHelper = () => {
+        const parentWin = (window.parent && window.parent !== window) ? window.parent : window;
+        return parentWin.ptcgdmInventoryCrypto || parentWin.ptcgdmEncryption || null;
+      };
+      const isInventoryEncryptionUnlocked = () => {
+        if (!IS_INVENTORY) return true;
+        const helper = getInventoryCryptoHelper();
+        const helperStatus = helper && typeof helper.status === 'string' ? helper.status : '';
+        if (helperStatus === 'plaintext') return true;
+        if (helper && (helper.isUnlocked === true || helperStatus === 'encrypted_v1')) return true;
+        if (helperStatus === 'encrypted_v1_locked') return false;
+        if (encryptionMeta && encryptionMeta.status === 'encrypted_v1') return false;
+        return true;
+      };
+      const isInventoryLocked = () => IS_INVENTORY && !isInventoryEncryptionUnlocked();
       const RAW_SET_LABELS = (SAVE_CONFIG.setLabels && typeof SAVE_CONFIG.setLabels === 'object' && !Array.isArray(SAVE_CONFIG.setLabels)) ? SAVE_CONFIG.setLabels : {};
       const SET_LABELS = {};
       Object.entries(RAW_SET_LABELS).forEach(([key, value]) => {
@@ -1752,6 +1767,12 @@ function ptcgdm_render_builder(array $config = []){
         updateLoadDeckButton(true);
         updateJSON();
         updateBulkAddState();
+        updateDeckButtons();
+        fetchEncryptionMetaCached().then(() => {
+          updateEncryptionDependentButtons();
+        }).catch(() => {
+          updateEncryptionDependentButtons();
+        });
         autoLoadInventory();
       });
 
@@ -4065,11 +4086,30 @@ function ptcgdm_render_builder(array $config = []){
       }
       function updateDeckButtons(){
         const has = deck.length>0;
-        if(els.btnSaveDeck){
-          const shouldEnable = has && !isSavingDeck;
-          els.btnSaveDeck.disabled = !shouldEnable;
-        }
+        updateEncryptionDependentButtons(has);
         if(els.btnClearDeck) els.btnClearDeck.disabled=!has;
+      }
+
+      function updateEncryptionDependentButtons(hasBuffer = deck.length > 0){
+        const locked = isInventoryLocked();
+        if(els.btnSaveDeck){
+          const shouldEnable = hasBuffer && !isSavingDeck && !locked;
+          els.btnSaveDeck.disabled = !shouldEnable;
+          if (locked) {
+            els.btnSaveDeck.title = 'Unlock in the Security tab to save inventory.';
+          } else {
+            els.btnSaveDeck.removeAttribute('title');
+          }
+        }
+        if (IS_INVENTORY && els.btnSyncInventory) {
+          const shouldEnable = !isManualSyncing && !locked;
+          els.btnSyncInventory.disabled = !shouldEnable;
+          if (locked) {
+            els.btnSyncInventory.title = 'Unlock in the Security tab to sync inventory.';
+          } else {
+            els.btnSyncInventory.removeAttribute('title');
+          }
+        }
       }
       function updateJSON(){
         const entries = buildSaveEntries();
@@ -4109,6 +4149,12 @@ function ptcgdm_render_builder(array $config = []){
 
       async function saveDeck(){
         if (isSavingDeck) {
+          return;
+        }
+        if (isInventoryLocked()) {
+          renderSaveProgress('Unlock in the Security tab to save inventory.');
+          setSaveProgressVisible(false);
+          updateDeckButtons();
           return;
         }
         isSavingDeck = true;
@@ -4241,6 +4287,11 @@ function ptcgdm_render_builder(array $config = []){
 
       async function triggerManualInventorySync(){
         if (!IS_INVENTORY || isManualSyncing) {
+          return;
+        }
+        if (isInventoryLocked()) {
+          alert('Inventory is encrypted. Please unlock it in the Security tab to sync.');
+          updateDeckButtons();
           return;
         }
         const action = SAVE_CONFIG.manualSyncAction || '';
@@ -4378,6 +4429,7 @@ function ptcgdm_render_builder(array $config = []){
           button.disabled = false;
           button.textContent = defaultLabel || 'Sync Products';
         }
+        updateEncryptionDependentButtons();
       }
 
       function normalizeManualSyncStatus(raw){
@@ -4672,6 +4724,7 @@ function ptcgdm_render_builder(array $config = []){
           const bridgeMeta = bridge.getMetadata();
           if (bridgeMeta) {
             encryptionMeta = bridgeMeta;
+            updateEncryptionDependentButtons();
             return encryptionMeta;
           }
         }
@@ -4683,6 +4736,7 @@ function ptcgdm_render_builder(array $config = []){
         } catch (err) {
           // ignore
         }
+        updateEncryptionDependentButtons();
         return encryptionMeta;
       }
       async function getMasterKeyFromBridge(usages = ['decrypt']){
@@ -4724,6 +4778,7 @@ function ptcgdm_render_builder(array $config = []){
         if (encryptedInventoryLoaded && !forceReload) return true;
         if (encryptedLoadInFlight) return true;
         const meta = await fetchEncryptionMetaCached();
+        updateEncryptionDependentButtons();
         if (!meta || meta.status !== 'encrypted_v1') {
           return false;
         }
@@ -4762,6 +4817,7 @@ function ptcgdm_render_builder(array $config = []){
         if (bridge.metadata) {
           encryptionMeta = bridge.metadata;
         }
+        updateEncryptionDependentButtons();
         bridge.onMasterKey((event) => {
           if (event && event.metadata) {
             encryptionMeta = event.metadata;
@@ -4769,12 +4825,14 @@ function ptcgdm_render_builder(array $config = []){
           if (IS_INVENTORY) {
             attemptEncryptedAutoLoad(true);
           }
+          updateEncryptionDependentButtons();
         });
         if (IS_INVENTORY) {
           getMasterKeyFromBridge().then((key) => {
             if (key) {
               attemptEncryptedAutoLoad(true);
             }
+            updateEncryptionDependentButtons();
           }).catch(() => {});
         }
         return true;
