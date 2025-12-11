@@ -672,7 +672,7 @@ function ptcgdm_get_admin_ui_content() {
 
         const securityRoot = wrapper.querySelector('[data-security-root]');
         if (securityRoot) {
-        const apiBase = `${window.location.origin.replace(/\/$/, '')}/wp-json/ptcgdm/v1`;
+        const apiBase = '<?php echo esc_url_raw( untrailingslashit( rest_url( 'ptcgdm/v1' ) ) ); ?>';
         const restNonce = '<?php echo esc_js(wp_create_nonce('wp_rest')); ?>';
 
         const withRestNonce = (headers = {}) => {
