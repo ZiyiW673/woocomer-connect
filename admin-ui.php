@@ -96,7 +96,8 @@ function ptcgdm_render_admin_orders_panel() {
   $ajax_url = esc_url(admin_url('admin-ajax.php'));
 
   echo '<div class="ptcgdm-orders" data-ajax-url="' . $ajax_url . '" data-nonce="' . esc_attr($nonce) . '">';
-
+  echo '<div class="ptcgdm-orders__lock-banner" hidden>Unlock in the Security tab to view orders.</div>';
+  echo '<div class="ptcgdm-orders__content">';
   echo '<div class="ptcgdm-orders__list is-active">';
   echo '<table class="ptcgdm-orders__table">';
   echo '<thead><tr>';
@@ -215,6 +216,7 @@ function ptcgdm_render_admin_orders_panel() {
 
   echo '</div>';
   echo '</div>';
+  echo '</div>';
 }
 
 /**
@@ -327,6 +329,10 @@ function ptcgdm_get_admin_ui_content() {
       .ptcgdm-orders__table th { background: #111725; font-weight: 700; }
       .ptcgdm-orders__table tr:last-child td { border-bottom: none; }
       .ptcgdm-orders__table--nested { margin-top: 8px; }
+      .ptcgdm-orders__content { position: relative; }
+      .ptcgdm-orders.is-locked .ptcgdm-orders__content { filter: blur(3px); pointer-events: none; user-select: none; }
+      .ptcgdm-orders__lock-banner { margin: 0 0 12px; padding: 10px 12px; border: 1px dashed #324061; background: #0f1218; color: #cfd6e6; border-radius: 10px; }
+      .ptcgdm-orders__lock-banner[hidden] { display: none; }
       .ptcgdm-orders__meta { margin: 4px 0; }
       .ptcgdm-orders__totals p { margin: 4px 0; }
       .ptcgdm-product-link { background: none; border: none; color: #7ea6ff; cursor: pointer; padding: 0; text-align: left; text-decoration: underline; font: inherit; }
@@ -442,6 +448,8 @@ function ptcgdm_get_admin_ui_content() {
           const backButtons = Array.from(ordersWrapper.querySelectorAll('.ptcgdm-orders__back'));
           const statusForms = Array.from(ordersWrapper.querySelectorAll('.ptcgdm-order-status-form'));
           const productLinks = Array.from(ordersWrapper.querySelectorAll('.ptcgdm-product-link'));
+          const lockBanner = ordersWrapper.querySelector('.ptcgdm-orders__lock-banner');
+          const contentWrapper = ordersWrapper.querySelector('.ptcgdm-orders__content');
 
           let productPopover = null;
           const ensurePopover = () => {
@@ -495,6 +503,65 @@ function ptcgdm_get_admin_ui_content() {
               showList();
             });
           });
+
+          const setOrdersLocked = (locked) => {
+            ordersWrapper.classList.toggle('is-locked', !!locked);
+            if (contentWrapper) {
+              contentWrapper.classList.toggle('is-locked', !!locked);
+            }
+            if (lockBanner) {
+              lockBanner.hidden = !locked;
+            }
+            viewButtons.forEach((btn) => {
+              btn.disabled = !!locked;
+              if (locked) {
+                btn.setAttribute('aria-disabled', 'true');
+              } else {
+                btn.removeAttribute('aria-disabled');
+              }
+            });
+          };
+
+          const computeOrdersLocked = () => {
+            const bridge = window.ptcgdmZkBridge;
+            const meta = bridge && typeof bridge.getMetadata === 'function' ? bridge.getMetadata() : null;
+            const helper = window.ptcgdmInventoryCrypto || window.ptcgdmEncryption || null;
+            const helperStatus = helper && helper.status;
+            const encrypted = (meta && meta.status === 'encrypted_v1')
+              || helperStatus === 'encrypted_v1'
+              || helperStatus === 'encrypted_v1_locked';
+            const unlocked = helperStatus === 'plaintext'
+              || (helper && (helper.isUnlocked === true
+                || (helperStatus === 'encrypted_v1' && typeof helper.decryptInventoryText === 'function')));
+            return encrypted && !unlocked;
+          };
+
+          const refreshOrderLockState = () => {
+            setOrdersLocked(computeOrdersLocked());
+          };
+
+          const attachOrderBridge = () => {
+            const bridge = window.ptcgdmZkBridge;
+            if (bridge && typeof bridge.onMasterKey === 'function') {
+              bridge.onMasterKey(() => {
+                refreshOrderLockState();
+              });
+              return true;
+            }
+            return false;
+          };
+
+          refreshOrderLockState();
+          if (!attachOrderBridge()) {
+            let attempts = 0;
+            const interval = setInterval(() => {
+              attempts += 1;
+              if (attachOrderBridge() || attempts > 10) {
+                clearInterval(interval);
+                refreshOrderLockState();
+              }
+            }, 300);
+          }
 
           const ajaxUrl = ordersWrapper.dataset.ajaxUrl;
           const nonce = ordersWrapper.dataset.nonce;
