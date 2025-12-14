@@ -7534,6 +7534,12 @@ function ptcgdm_queue_inventory_sync($dataset_key = '') {
   $event_scheduled = false;
   $spawn_triggered = false;
 
+  // Respect sites that intentionally disable WP-Cron; fall back to async
+  // AJAX launching in that case instead of claiming the sync was queued.
+  if (defined('DISABLE_WP_CRON') && DISABLE_WP_CRON) {
+    return false;
+  }
+
   if (function_exists('wp_next_scheduled') && function_exists('wp_schedule_single_event')) {
     $existing = wp_next_scheduled($hook);
     if (!$existing) {
@@ -7613,15 +7619,20 @@ function ptcgdm_launch_inventory_sync_async_request($dataset_key = '') {
 }
 
 function ptcgdm_trigger_inventory_sync($dataset_key = '') {
-  if (ptcgdm_queue_inventory_sync($dataset_key)) {
-    return true;
+  // Try WP-Cron first; if unavailable or scheduling fails, fall back to
+  // launching an async admin-ajax request so the sync actually runs.
+  $queued = ptcgdm_queue_inventory_sync($dataset_key);
+  $cron_disabled = defined('DISABLE_WP_CRON') && DISABLE_WP_CRON;
+
+  if (!$queued || $cron_disabled) {
+    if (ptcgdm_launch_inventory_sync_async_request($dataset_key)) {
+      return true;
+    }
+    // If async failed, give WP-Cron one more chance in case it is available.
+    return $queued ? true : ptcgdm_queue_inventory_sync($dataset_key);
   }
 
-  if (ptcgdm_launch_inventory_sync_async_request($dataset_key)) {
-    return true;
-  }
-
-  return false;
+  return true;
 }
 
 function ptcgdm_prepare_inventory_sync_environment() {
