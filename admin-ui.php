@@ -1045,7 +1045,18 @@ function ptcgdm_get_admin_ui_content() {
                 setStatus('initial', warnings.join(' '), 'info');
               }
               for (const dataset of Object.keys(plaintextMap)) {
-                const plaintext = plaintextMap[dataset];
+                const plaintext = plaintextMap[dataset] || '';
+                let parsed;
+                try {
+                  parsed = JSON.parse(plaintext);
+                } catch (err) {
+                  parsed = null;
+                }
+                const cardCount = Array.isArray(parsed?.cards) ? parsed.cards.length : 0;
+                if (!plaintext || plaintext.trim().length < 200 || cardCount === 0) {
+                  warnings.push(`Skipping ${dataset}: plaintext inventory is empty or missing.`);
+                  continue;
+                }
                 const encrypted = await encryptWithKey(master, new TextEncoder().encode(plaintext));
                 await saveEncryptedInventory(dataset, encrypted, buildEncryptedInventoryMeta(dataset, plaintext));
               }

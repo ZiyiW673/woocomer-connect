@@ -388,10 +388,16 @@ function ptcgdm_get_inventory_path_for_dataset($dataset_key = '') {
   return $dir . ptcgdm_get_inventory_filename_for_dataset($dataset_key);
 }
 
-function ptcgdm_get_encrypted_inventory_path_for_dataset($dataset_key = '') {
-  $dir = trailingslashit(ptcgdm_get_inventory_dir());
-  $base = pathinfo(ptcgdm_get_inventory_filename_for_dataset($dataset_key), PATHINFO_FILENAME);
-  return $dir . $base . '.enc.json';
+function ptcgdm_get_encrypted_inventory_path_for_dataset($dataset) {
+  $dir = ptcgdm_get_inventory_dir();
+  $dataset = ptcgdm_normalize_inventory_dataset_key($dataset);
+
+  // Mirror plaintext naming:
+  // pokemon   -> card-inventory.enc.json
+  // one_piece -> card-inventory-one_piece.enc.json
+  $base = 'card-inventory';
+  $suffix = ($dataset && $dataset !== 'pokemon') ? '-' . $dataset : '';
+  return trailingslashit($dir) . $base . $suffix . '.enc.json';
 }
 
 function ptcgdm_get_encrypted_inventory_candidates($dataset_key = '') {
@@ -9918,6 +9924,15 @@ function ptcgdm_register_encryption_routes() {
         return new WP_Error('invalid_payload', 'Dataset or blob missing.', ['status' => 400]);
       }
 
+      $raw_blob = isset($body['blob']) && is_array($body['blob']) ? ($body['blob']['data'] ?? '') : '';
+      $raw_meta = isset($body['meta']) && is_array($body['meta']) ? $body['meta'] : null;
+      $meta_length = is_array($raw_meta) ? intval($raw_meta['content_length'] ?? 0) : 0;
+      $meta_count  = is_array($raw_meta) ? intval($raw_meta['card_count'] ?? 0) : 0;
+
+      if (strlen($raw_blob) < 200 || ($meta_length === 0 && $meta_count === 0)) {
+        return new WP_Error('invalid_encrypted_payload', 'Refusing to save encrypted inventory: payload appears empty.', ['status' => 400]);
+      }
+
       $meta = [];
       if (!empty($body['meta']) && is_array($body['meta'])) {
         $meta = ptcgdm_normalize_encryption_meta(array_merge($body['meta'], [
@@ -9940,6 +9955,16 @@ function ptcgdm_register_encryption_routes() {
         $payload['meta'] = $meta;
       }
       $payload['version'] = 1;
+
+      if (file_exists($path)) {
+        $existing = @file_get_contents($path);
+        if (is_string($existing) && strlen($existing) > 0) {
+          $new_json = wp_json_encode($payload);
+          if (is_string($new_json) && strlen($new_json) < (strlen($existing) * 0.5)) {
+            return new WP_Error('refuse_overwrite', 'Refusing to overwrite existing encrypted inventory with a much smaller payload.', ['status' => 400]);
+          }
+        }
+      }
 
       $written = file_put_contents($path, wp_json_encode($payload));
       if ($written === false) {
