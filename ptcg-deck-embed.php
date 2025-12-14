@@ -319,6 +319,42 @@ function ptcgdm_detect_dataset_from_entries($payload) {
   return '';
 }
 
+function ptcgdm_filter_inventory_entries_by_dataset(array $entries, $dataset_key = '') {
+  $dataset_key = ptcgdm_normalize_inventory_dataset_key($dataset_key);
+  $filtered = [];
+
+  foreach ($entries as $entry) {
+    if (!is_array($entry)) {
+      continue;
+    }
+
+    $card_id = '';
+    if (!empty($entry['id'])) {
+      $card_id = (string) $entry['id'];
+    } elseif (!empty($entry['cardId'])) {
+      $card_id = (string) $entry['cardId'];
+    }
+
+    $detected = ptcgdm_detect_dataset_from_card_id($card_id);
+
+    if ($dataset_key === 'pokemon') {
+      if ($detected && $detected !== 'pokemon') {
+        continue;
+      }
+    } elseif ($detected !== '' && $detected !== $dataset_key) {
+      continue;
+    } elseif ($dataset_key === 'one_piece' && $detected === '') {
+      // Skip ambiguous entries when syncing One Piece to avoid syncing the
+      // wrong game's cards.
+      continue;
+    }
+
+    $filtered[] = $entry;
+  }
+
+  return $filtered;
+}
+
 function ptcgdm_slugify_inventory_dataset_key($dataset_key = '') {
   $key = ptcgdm_normalize_inventory_dataset_key($dataset_key);
   $slug = preg_replace('/[^a-z0-9]+/i', '-', $key);
@@ -5334,6 +5370,20 @@ add_action('wp_ajax_ptcgdm_manual_inventory_sync', function(){
         $dataset_key = $detected_dataset;
       }
     }
+
+    $entries_override = ptcgdm_filter_inventory_entries_by_dataset($entries_override, $dataset_key);
+
+    $decoded_content = json_decode($raw_content, true);
+    if (is_array($decoded_content)) {
+      if (isset($decoded_content['cards']) && is_array($decoded_content['cards'])) {
+        $decoded_content['cards'] = $entries_override;
+      } else {
+        $decoded_content = $entries_override;
+      }
+      $raw_content = wp_json_encode($decoded_content);
+    } else {
+      $raw_content = wp_json_encode(['cards' => $entries_override]);
+    }
   }
 
   $meta = ptcgdm_get_encryption_meta();
@@ -7718,6 +7768,8 @@ function ptcgdm_run_inventory_sync_now($args = []) {
   } elseif ($has_entries_override && is_array($provided_entries)) {
     $entries = $provided_entries;
   }
+
+  $entries = ptcgdm_filter_inventory_entries_by_dataset($entries, $dataset_key);
 
   try {
     $sync_summary = ptcgdm_sync_inventory_products($entries, ['run_id' => $run_id, 'dataset' => $dataset_key]);
