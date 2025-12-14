@@ -2507,7 +2507,8 @@ function ptcgdm_render_builder(array $config = []){
             ? trimmedLine.split(';').map(part => part.trim())
             : trimmedLine.split(/\s+/).map(part => part.trim()).filter(Boolean);
           if(tokens.length < 2){
-            return { error: 'Enter the set code followed by the card number, e.g., “TWM 141/167”.' };
+            const example = IS_ONE_PIECE ? 'OP13-009 5' : 'TWM 141/167';
+            return { error: `Enter the card code followed by the quantity, e.g., “${example}”.` };
           }
           if(IS_ONE_PIECE){
             const firstToken = tokens[0] || '';
