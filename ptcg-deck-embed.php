@@ -7614,8 +7614,30 @@ function ptcgdm_launch_inventory_sync_async_request($dataset_key = '') {
   ];
 
   $response = wp_safe_remote_post($url, $args);
+  if (is_wp_error($response)) {
+    return false;
+  }
 
-  return !is_wp_error($response);
+  $code = (int) wp_remote_retrieve_response_code($response);
+  if ($code !== 200) {
+    return false;
+  }
+
+  $body = wp_remote_retrieve_body($response);
+  $decoded = null;
+  if (is_string($body) && $body !== '') {
+    $decoded = json_decode($body, true);
+  }
+
+  if (is_array($decoded) && isset($decoded['success']) && $decoded['success'] === true) {
+    return true;
+  }
+
+  if (is_array($decoded) && isset($decoded['data']['synced']) && $decoded['data']['synced']) {
+    return true;
+  }
+
+  return false;
 }
 
 function ptcgdm_trigger_inventory_sync($dataset_key = '') {
@@ -7628,8 +7650,17 @@ function ptcgdm_trigger_inventory_sync($dataset_key = '') {
     if (ptcgdm_launch_inventory_sync_async_request($dataset_key)) {
       return true;
     }
-    // If async failed, give WP-Cron one more chance in case it is available.
-    return $queued ? true : ptcgdm_queue_inventory_sync($dataset_key);
+
+    // If async failed and WP-Cron is unavailable, run synchronously so the
+    // sync doesn't remain stuck in a queued state.
+    if (!$queued) {
+      ptcgdm_set_active_inventory_dataset($dataset_key);
+      ptcgdm_run_inventory_sync_event();
+      return true;
+    }
+
+    // If cron was scheduled, but async failed, try to re-queue once more.
+    return ptcgdm_queue_inventory_sync($dataset_key);
   }
 
   return true;
