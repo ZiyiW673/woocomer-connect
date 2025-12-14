@@ -273,6 +273,9 @@ function ptcgdm_slugify_inventory_dataset_key($dataset_key = '') {
   return $slug !== '' ? strtolower($slug) : 'inventory';
 }
 
+// Inventory payloads for every dataset live in the same directory; the only
+// distinction is a dataset-specific filename so multiple games can coexist
+// without collisions.
 function ptcgdm_get_inventory_filename_for_dataset($dataset_key = '') {
   $key = ptcgdm_normalize_inventory_dataset_key($dataset_key);
   if ($key === 'pokemon') {
