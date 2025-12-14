@@ -266,6 +266,59 @@ function ptcgdm_normalize_inventory_dataset_key($dataset_key = '') {
   return $key;
 }
 
+function ptcgdm_detect_dataset_from_card_id($card_id) {
+  $card_id = trim((string) $card_id);
+  if ($card_id === '') {
+    return '';
+  }
+
+  if (preg_match('/^(op|eb|st|prb)\d+-/i', $card_id)) {
+    return 'one_piece';
+  }
+
+  return '';
+}
+
+function ptcgdm_detect_dataset_from_entries($payload) {
+  if (is_string($payload)) {
+    $decoded = json_decode($payload, true);
+    if (!is_array($decoded)) {
+      return '';
+    }
+    $payload = $decoded;
+  }
+
+  if (!is_array($payload)) {
+    return '';
+  }
+
+  $entries = [];
+  if (isset($payload['cards']) && is_array($payload['cards'])) {
+    $entries = $payload['cards'];
+  } elseif (ptcgdm_is_list($payload)) {
+    $entries = $payload;
+  }
+
+  foreach ($entries as $entry) {
+    if (!is_array($entry)) {
+      continue;
+    }
+    $card_id = '';
+    if (!empty($entry['id'])) {
+      $card_id = (string) $entry['id'];
+    } elseif (!empty($entry['cardId'])) {
+      $card_id = (string) $entry['cardId'];
+    }
+
+    $detected = ptcgdm_detect_dataset_from_card_id($card_id);
+    if ($detected !== '') {
+      return $detected;
+    }
+  }
+
+  return '';
+}
+
 function ptcgdm_slugify_inventory_dataset_key($dataset_key = '') {
   $key = ptcgdm_normalize_inventory_dataset_key($dataset_key);
   $slug = preg_replace('/[^a-z0-9]+/i', '-', $key);
@@ -5111,6 +5164,12 @@ add_action('wp_ajax_ptcgdm_save_inventory', function(){
   }
 
   $dataset_key = ptcgdm_resolve_inventory_dataset_key($_POST);
+  if ($dataset_key === 'pokemon') {
+    $detected_dataset = ptcgdm_detect_dataset_from_entries($_POST['content'] ?? '');
+    if ($detected_dataset !== '') {
+      $dataset_key = $detected_dataset;
+    }
+  }
 
   $content = wp_unslash($_POST['content'] ?? '');
   if (!$content) wp_send_json_error('Empty content');
@@ -5210,6 +5269,13 @@ add_action('wp_ajax_ptcgdm_delete_inventory_card', function(){
     wp_send_json_error('Missing card ID', 400);
   }
 
+  if ($dataset_key === 'pokemon') {
+    $detected_dataset = ptcgdm_detect_dataset_from_card_id($card_id);
+    if ($detected_dataset !== '') {
+      $dataset_key = $detected_dataset;
+    }
+  }
+
   $remove_result = ptcgdm_remove_inventory_card_entry($card_id, $dataset_key);
   if (is_wp_error($remove_result)) {
     wp_send_json_error($remove_result->get_error_message());
@@ -5261,6 +5327,12 @@ add_action('wp_ajax_ptcgdm_manual_inventory_sync', function(){
     $entries_override = ptcgdm_extract_inventory_entries_for_sync($raw_content);
     if ($entries_override === null) {
       wp_send_json_error(['message' => __('Inventory payload is invalid.', 'ptcgdm')]);
+    }
+    if ($dataset_key === 'pokemon') {
+      $detected_dataset = ptcgdm_detect_dataset_from_entries($entries_override);
+      if ($detected_dataset !== '') {
+        $dataset_key = $detected_dataset;
+      }
     }
   }
 
