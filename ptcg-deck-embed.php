@@ -1975,6 +1975,7 @@ function ptcgdm_render_builder(array $config = []){
         const variants = new Set(normaliseNumberVariants(card.number));
         if(DATASET_KEY === 'one_piece'){
           normaliseNumberVariants(card.displayNumber).forEach(variant => variants.add(variant));
+          normaliseNumberVariants(card.id).forEach(variant => variants.add(variant));
         }
         if(!variants.size) return;
         variants.forEach(variant => {
