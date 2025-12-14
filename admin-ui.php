@@ -907,12 +907,37 @@ function ptcgdm_get_admin_ui_content() {
             emitBridgeUpdate();
           };
 
-          const saveEncryptedInventory = async (dataset, blob) => {
+          const buildEncryptedInventoryMeta = (dataset, plaintext) => {
+            const meta = {
+              dataset,
+              content_length: plaintext ? plaintext.length : 0,
+              saved_at: Math.floor(Date.now() / 1000),
+            };
+
+            if (!plaintext) return meta;
+
+            try {
+              const decoded = JSON.parse(plaintext);
+              if (decoded && typeof decoded === 'object') {
+                if (Array.isArray(decoded.cards)) {
+                  meta.card_count = decoded.cards.length;
+                } else if (Array.isArray(decoded)) {
+                  meta.card_count = decoded.length;
+                }
+              }
+            } catch (err) {
+              // Ignore parse errors; fall back to length-only metadata.
+            }
+
+            return meta;
+          };
+
+          const saveEncryptedInventory = async (dataset, blob, meta) => {
             const res = await fetch(`${apiBase}/encrypted-inventory`, {
               method: 'POST',
               credentials: 'include',
               headers: withRestNonce({ 'Content-Type': 'application/json' }),
-              body: JSON.stringify({ dataset, blob }),
+              body: JSON.stringify(meta ? { dataset, blob, meta } : { dataset, blob }),
             });
             if (!res.ok) throw new Error(`Failed to store encrypted inventory for ${dataset}`);
           };
@@ -1020,8 +1045,9 @@ function ptcgdm_get_admin_ui_content() {
                 setStatus('initial', warnings.join(' '), 'info');
               }
               for (const dataset of Object.keys(plaintextMap)) {
-                const encrypted = await encryptWithKey(master, new TextEncoder().encode(plaintextMap[dataset]));
-                await saveEncryptedInventory(dataset, encrypted);
+                const plaintext = plaintextMap[dataset];
+                const encrypted = await encryptWithKey(master, new TextEncoder().encode(plaintext));
+                await saveEncryptedInventory(dataset, encrypted, buildEncryptedInventoryMeta(dataset, plaintext));
               }
               await saveMeta({ status: 'encrypted_v1', pw_salt: saltPw, pw_iterations: pwIterations, verifier: verifierBlob, master_wrapped_pw: masterWrappedPw });
               setStatus('initial', 'Encryption completed. You can now unlock with your password.', 'success');
