@@ -1273,6 +1273,16 @@ function ptcgdm_get_admin_ui_content() {
 
           securityRoot.addEventListener('click', handleActionClick);
 
+          if (lockOverlay) {
+            lockOverlay.addEventListener('click', (event) => {
+              const action = event.target && event.target.dataset ? event.target.dataset.action : '';
+              if (action === 'overlay-unlock') {
+                const password = lockOverlayPassword && lockOverlayPassword.value ? lockOverlayPassword.value : '';
+                unlockWithPassword(password, { fromOverlay: true });
+              }
+            });
+          }
+
           if (recoveryUpload) {
             recoveryUpload.addEventListener('change', (event) => {
               const file = event.target.files && event.target.files[0];
