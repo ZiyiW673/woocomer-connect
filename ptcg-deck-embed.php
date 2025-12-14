@@ -4276,6 +4276,11 @@ function ptcgdm_render_builder(array $config = []){
         }
         const entriesForSave = updateJSON();
         const plaintextContent = deckJsonCache;
+        const encryptedMeta = {
+          content_length: plaintextContent ? plaintextContent.length : 0,
+          card_count: Array.isArray(entriesForSave) ? entriesForSave.length : 0,
+          dataset: DATASET_KEY,
+        };
         const meta = await fetchEncryptionMetaCached();
         const parentHelper = (window.parent && window.parent !== window ? window.parent.ptcgdmInventoryCrypto : null) || window.ptcgdmInventoryCrypto || null;
         const helperStatus = parentHelper && typeof parentHelper.status === 'string' ? parentHelper.status : '';
@@ -4301,7 +4306,7 @@ function ptcgdm_render_builder(array $config = []){
               method: 'POST',
               credentials: 'include',
               headers: withRestNonce({ 'Content-Type': 'application/json' }),
-              body: JSON.stringify({ dataset: DATASET_KEY, blob: encryptedBlob }),
+              body: JSON.stringify({ dataset: DATASET_KEY, blob: encryptedBlob, meta: encryptedMeta }),
             });
             if (!res.ok) {
               let detail = '';
@@ -9759,6 +9764,55 @@ function ptcgdm_validate_encryption_blob($blob) {
   ];
 }
 
+function ptcgdm_normalize_encryption_meta($meta) {
+  if (!is_array($meta)) {
+    return [];
+  }
+
+  $clean = [];
+  if (isset($meta['content_length'])) {
+    $clean['content_length'] = max(0, absint($meta['content_length']));
+  }
+  if (isset($meta['card_count'])) {
+    $clean['card_count'] = max(0, absint($meta['card_count']));
+  }
+  if (!empty($meta['dataset'])) {
+    $clean['dataset'] = ptcgdm_normalize_inventory_dataset_key($meta['dataset']);
+  }
+  if (!empty($meta['saved_at'])) {
+    $clean['saved_at'] = absint($meta['saved_at']);
+  }
+
+  return $clean;
+}
+
+function ptcgdm_extract_encrypted_payload($decoded) {
+  $meta = [];
+
+  $blob = ptcgdm_validate_encryption_blob($decoded);
+  if ($blob) {
+    return [ 'blob' => $blob, 'meta' => $meta ];
+  }
+
+  if (!is_array($decoded) || !isset($decoded['blob'])) {
+    return null;
+  }
+
+  $blob = ptcgdm_validate_encryption_blob($decoded['blob']);
+  if (!$blob) {
+    return null;
+  }
+
+  if (!empty($decoded['meta'])) {
+    $meta = ptcgdm_normalize_encryption_meta($decoded['meta']);
+  }
+
+  return [
+    'blob' => $blob,
+    'meta' => $meta,
+  ];
+}
+
 /**
  * Register REST routes for encryption metadata and encrypted payload storage.
  */
@@ -9835,13 +9889,14 @@ function ptcgdm_register_encryption_routes() {
 
       $contents = file_get_contents($path);
       $decoded  = json_decode($contents, true);
-      $blob     = ptcgdm_validate_encryption_blob($decoded);
-      if (!$blob) {
+      $payload  = ptcgdm_extract_encrypted_payload($decoded);
+      if (!$payload || empty($payload['blob'])) {
         return new WP_Error('corrupt_blob', 'Stored payload is invalid.', ['status' => 500]);
       }
       return [
         'dataset' => $dataset,
-        'blob'    => $blob,
+        'blob'    => $payload['blob'],
+        'meta'    => $payload['meta'],
       ];
     },
     'permission_callback' => function () {
@@ -9863,13 +9918,30 @@ function ptcgdm_register_encryption_routes() {
         return new WP_Error('invalid_payload', 'Dataset or blob missing.', ['status' => 400]);
       }
 
+      $meta = [];
+      if (!empty($body['meta']) && is_array($body['meta'])) {
+        $meta = ptcgdm_normalize_encryption_meta(array_merge($body['meta'], [
+          'dataset'  => $dataset,
+          'saved_at' => time(),
+        ]));
+      }
+
       $dir = ptcgdm_get_inventory_dir();
       if (!file_exists($dir)) {
         wp_mkdir_p($dir);
       }
 
       $path = ptcgdm_get_encrypted_inventory_path_for_dataset($dataset);
-      $written = file_put_contents($path, wp_json_encode($blob));
+      $payload = [
+        'dataset' => $dataset,
+        'blob'    => $blob,
+      ];
+      if ($meta) {
+        $payload['meta'] = $meta;
+      }
+      $payload['version'] = 1;
+
+      $written = file_put_contents($path, wp_json_encode($payload));
       if ($written === false) {
         return new WP_Error('write_failed', 'Unable to persist encrypted payload.', ['status' => 500]);
       }
@@ -9888,7 +9960,7 @@ function ptcgdm_register_encryption_routes() {
         }
       }
 
-      return [ 'dataset' => $dataset ];
+      return [ 'dataset' => $dataset, 'meta' => $meta ];
     },
     'permission_callback' => function () {
       return ptcgdm_admin_ui_is_authorized();
