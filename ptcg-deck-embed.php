@@ -5352,55 +5352,47 @@ add_action('wp_ajax_ptcgdm_manual_inventory_sync', function(){
     ]);
   }
 
-  $run_id = ptcgdm_generate_inventory_sync_run_id();
-  $queued_message = __('Inventory sync queued. WooCommerce products will update shortly.', 'ptcgdm');
-
-  $syncQueued = false;
-  if ($entries_override === null) {
-    ptcgdm_set_inventory_sync_status('queued', $queued_message, ptcgdm_build_inventory_sync_status_extra($run_id, [
-      'result' => '',
-      'dataset' => $dataset_key,
-    ]), $dataset_key);
-
-    $syncQueued = ptcgdm_trigger_inventory_sync($dataset_key);
-    if ($syncQueued) {
-      wp_send_json_success([
-        'queued'  => true,
-        'syncQueued' => true,
-        'message' => $queued_message,
-        'status'  => ptcgdm_get_inventory_sync_status($dataset_key),
-      ]);
+  // Persist any provided inventory payload before queueing so the background
+  // sync runs against the latest client state without keeping this request
+  // open long enough to time out.
+  if ($entries_override !== null) {
+    $dir = trailingslashit(ptcgdm_get_inventory_dir());
+    if (!file_exists($dir) && !wp_mkdir_p($dir)) {
+      wp_send_json_error(['message' => __('Unable to create inventory directory.', 'ptcgdm')]);
+    }
+    if (!is_writable($dir)) {
+      wp_send_json_error(['message' => __('Inventory directory is not writable.', 'ptcgdm')]);
+    }
+    $path = ptcgdm_get_inventory_path_for_dataset($dataset_key);
+    if (file_put_contents($path, $raw_content) === false) {
+      wp_send_json_error(['message' => __('Unable to save inventory snapshot for syncing.', 'ptcgdm')]);
     }
   }
 
-  $sync_args = ['run_id' => $run_id, 'dataset' => $dataset_key];
-  if (is_array($entries_override)) {
-    $sync_args['entries'] = $entries_override;
-  }
+  $run_id = ptcgdm_generate_inventory_sync_run_id();
+  $queued_message = __('Inventory sync queued. WooCommerce products will update shortly.', 'ptcgdm');
 
-  $result = ptcgdm_run_inventory_sync_now($sync_args);
+  ptcgdm_set_inventory_sync_status('queued', $queued_message, ptcgdm_build_inventory_sync_status_extra($run_id, [
+    'result' => '',
+    'dataset' => $dataset_key,
+  ]), $dataset_key);
 
-  if ($result === true) {
-    $status = ptcgdm_get_inventory_sync_status($dataset_key);
+  $syncQueued = ptcgdm_trigger_inventory_sync($dataset_key);
+  if ($syncQueued) {
     wp_send_json_success([
-      'synced'  => true,
-      'message' => $status['message'] ?: __('Inventory sync completed successfully.', 'ptcgdm'),
-      'status'  => $status,
+      'queued'  => true,
+      'syncQueued' => true,
+      'message' => $queued_message,
+      'status'  => ptcgdm_get_inventory_sync_status($dataset_key),
     ]);
   }
 
-  if (is_wp_error($result)) {
-    $status = ptcgdm_get_inventory_sync_status($dataset_key);
-    $message = $result->get_error_message();
-    wp_send_json_error([
-      'message' => $message ? $message : __('Unable to sync inventory.', 'ptcgdm'),
-      'status'  => $status,
-    ]);
-  }
+  $status = ptcgdm_get_inventory_sync_status($dataset_key);
+  $message = is_wp_error($syncQueued) ? $syncQueued->get_error_message() : ($status['message'] ?: __('Unable to start inventory sync.', 'ptcgdm'));
 
   wp_send_json_error([
-    'message' => __('Unable to start inventory sync. Please try again.', 'ptcgdm'),
-    'status'  => ptcgdm_get_inventory_sync_status($dataset_key),
+    'message' => $message,
+    'status'  => $status,
   ]);
 });
 
