@@ -258,6 +258,19 @@ function ptcgdm_render_admin_security_panel() {
   echo '<div class="ptcgdm-security__status" data-status="recovery" aria-live="polite"></div>';
   echo '</div>';
 
+  echo '<div class="ptcgdm-lock-overlay" data-lock-overlay="1" hidden>';
+  echo '<div class="ptcgdm-lock-overlay__dialog">';
+  echo '<h3 class="ptcgdm-lock-overlay__title">Inventory locked</h3>';
+  echo '<p class="ptcgdm-lock-overlay__help">Enter your encryption password to unlock inventory data for this session.</p>';
+  echo '<label class="ptcgdm-lock-overlay__field" for="ptcgdm-lock-overlay-password">Password</label>';
+  echo '<input type="password" id="ptcgdm-lock-overlay-password" class="ptcgdm-security__input ptcgdm-lock-overlay__input" autocomplete="current-password" />';
+  echo '<div class="ptcgdm-lock-overlay__actions">';
+  echo '<button type="button" class="ptcgdm-security__button" data-action="overlay-unlock">Unlock</button>';
+  echo '</div>';
+  echo '<div class="ptcgdm-lock-overlay__status" data-lock-overlay-status aria-live="polite"></div>';
+  echo '</div>';
+  echo '</div>';
+
   echo '</div>';
 }
 
@@ -320,6 +333,17 @@ function ptcgdm_get_admin_ui_content() {
       .ptcgdm-security__checkbox { display: inline-flex; align-items: center; gap: 6px; margin-bottom: 8px; }
       .ptcgdm-security__actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
       .ptcgdm-security__upload input { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+      .ptcgdm-lock-overlay { position: fixed; inset: 0; background: rgba(4, 6, 11, 0.8); display: flex; align-items: center; justify-content: center; z-index: 9999; padding: 16px; }
+      .ptcgdm-lock-overlay[hidden] { display: none; }
+      .ptcgdm-lock-overlay__dialog { background: #0c101a; border: 1px solid #324061; border-radius: 12px; padding: 18px; max-width: 420px; width: 100%; box-shadow: 0 12px 48px rgba(0, 0, 0, 0.35); color: #cfd6e6; }
+      .ptcgdm-lock-overlay__title { margin: 0 0 6px; color: #fff; }
+      .ptcgdm-lock-overlay__help { margin: 0 0 12px; color: #9fabc7; }
+      .ptcgdm-lock-overlay__field { display: block; margin-bottom: 6px; color: #cfd6e6; font-weight: 600; }
+      .ptcgdm-lock-overlay__input { width: 100%; }
+      .ptcgdm-lock-overlay__actions { margin-top: 12px; display: flex; justify-content: flex-end; }
+      .ptcgdm-lock-overlay__status { margin-top: 10px; min-height: 18px; color: #cfd6e6; }
+      .ptcgdm-lock-overlay__status--error { color: #ff9c9c; }
+      .ptcgdm-lock-overlay__status--success { color: #7ee0a3; }
       .ptcgdm-orders__list { display: none; }
       .ptcgdm-orders__list.is-active, .ptcgdm-orders__detail-panel.is-active { display: block; }
       .ptcgdm-orders__detail-panel { display: none; background: #0f1218; border: 1px solid #1f2533; border-radius: 12px; padding: 16px; color: #cfd6e6; }
@@ -693,6 +717,40 @@ function ptcgdm_get_admin_ui_content() {
 
           let metadata = null;
           let masterKey = null;
+          const lockOverlay = wrapper.querySelector('[data-lock-overlay]');
+          const lockOverlayPassword = lockOverlay ? lockOverlay.querySelector('#ptcgdm-lock-overlay-password') : null;
+          const lockOverlayStatus = lockOverlay ? lockOverlay.querySelector('[data-lock-overlay-status]') : null;
+          const setLockOverlayStatus = (message, type = 'info') => {
+            if (!lockOverlayStatus) return;
+            lockOverlayStatus.textContent = message || '';
+            lockOverlayStatus.classList.toggle('ptcgdm-lock-overlay__status--error', type === 'error');
+            lockOverlayStatus.classList.toggle('ptcgdm-lock-overlay__status--success', type === 'success');
+          };
+
+          const updateLockOverlayVisibility = (message = '') => {
+            if (!lockOverlay) return;
+            const encrypted = metadata && metadata.status === 'encrypted_v1';
+            const unlocked = !!masterKey;
+            const shouldShow = encrypted && !unlocked;
+            lockOverlay.hidden = !shouldShow;
+            lockOverlay.classList.toggle('is-active', shouldShow);
+            if (shouldShow) {
+              if (message) {
+                setLockOverlayStatus(message, 'error');
+              } else {
+                setLockOverlayStatus('');
+              }
+              if (lockOverlayPassword) {
+                lockOverlayPassword.focus();
+              }
+            } else {
+              if (lockOverlayPassword) {
+                lockOverlayPassword.value = '';
+              }
+              setLockOverlayStatus('');
+            }
+          };
+
           const zkBridge = window.ptcgdmZkBridge || { listeners: [] };
           zkBridge.getMetadata = () => metadata;
           zkBridge.getMasterKeyBytes = async () => {
@@ -796,6 +854,7 @@ function ptcgdm_get_admin_ui_content() {
           const setMasterKey = (key) => {
             masterKey = key;
             emitBridgeUpdate();
+            updateLockOverlayVisibility();
             return masterKey;
           };
 
@@ -827,6 +886,8 @@ function ptcgdm_get_admin_ui_content() {
             recoveryResetEls.forEach((el) => {
               el.hidden = !shouldShowReset;
             });
+
+            updateLockOverlayVisibility();
           };
 
           const b64ToBytes = (b64) => Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
@@ -1069,14 +1130,29 @@ function ptcgdm_get_admin_ui_content() {
             }
           };
 
-          const unlockWithPassword = async () => {
+          const unlockWithPassword = async (passwordOverride = null, { fromOverlay = false } = {}) => {
             const latestMeta = await requireEncryptedMeta('password');
-            if (!latestMeta) return;
-            const password = (unlockPasswordInput.value || '').trim();
-            if (!password) {
-              setStatus('password', 'Password is required.', 'error');
+            if (!latestMeta) {
+              if (fromOverlay) setLockOverlayStatus('Encryption is not set up yet.', 'error');
               return;
             }
+
+            const passwordSource = passwordOverride !== null ? passwordOverride : (unlockPasswordInput && unlockPasswordInput.value ? unlockPasswordInput.value : '');
+            const password = (passwordSource || '').trim();
+
+            if (passwordOverride !== null && unlockPasswordInput) {
+              unlockPasswordInput.value = passwordOverride;
+            }
+
+            if (!password) {
+              setStatus('password', 'Password is required.', 'error');
+              if (fromOverlay) setLockOverlayStatus('Password is required.', 'error');
+              return;
+            }
+
+            setStatus('password', 'Unlocking...', 'info');
+            if (fromOverlay) setLockOverlayStatus('Unlocking...');
+
             try {
               const { pw_salt, pw_iterations, master_wrapped_pw } = latestMeta;
               const pwKey = await deriveKey(password, pw_salt, pw_iterations);
@@ -1086,10 +1162,19 @@ function ptcgdm_get_admin_ui_content() {
               await loadVerifier(masterKey);
 
               setStatus('password', 'Unlocked.', 'success');
+              if (fromOverlay) {
+                setLockOverlayStatus('Unlocked.', 'success');
+                updateLockOverlayVisibility();
+              }
               toggleSections();
             } catch (err) {
               setMasterKey(null);
-              setStatus('password', err && err.message ? err.message : 'Failed to unlock.', 'error');
+              const message = err && err.message ? err.message : 'Failed to unlock.';
+              setStatus('password', message, 'error');
+              if (fromOverlay) {
+                setLockOverlayStatus(message, 'error');
+                updateLockOverlayVisibility(message);
+              }
             }
           };
 
@@ -1176,6 +1261,9 @@ function ptcgdm_get_admin_ui_content() {
               performInitialEncrypt();
             } else if (action === 'unlock-password') {
               unlockWithPassword();
+            } else if (action === 'overlay-unlock') {
+              const password = lockOverlayPassword && lockOverlayPassword.value ? lockOverlayPassword.value : '';
+              unlockWithPassword(password, { fromOverlay: true });
             } else if (action === 'download-recovery') {
               downloadRecovery();
             } else if (action === 'reset-password') {
@@ -1198,6 +1286,14 @@ function ptcgdm_get_admin_ui_content() {
             recoveryDownloadButton.addEventListener('click', (event) => {
               if (event.isTrusted !== false) {
                 downloadRecovery();
+              }
+            });
+          }
+
+          if (lockOverlayPassword) {
+            lockOverlayPassword.addEventListener('keydown', (event) => {
+              if (event.key === 'Enter') {
+                unlockWithPassword(lockOverlayPassword.value || '', { fromOverlay: true });
               }
             });
           }
