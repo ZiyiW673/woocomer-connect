@@ -258,19 +258,6 @@ function ptcgdm_render_admin_security_panel() {
   echo '<div class="ptcgdm-security__status" data-status="recovery" aria-live="polite"></div>';
   echo '</div>';
 
-  echo '<div class="ptcgdm-lock-overlay" data-lock-overlay="1" hidden>';
-  echo '<div class="ptcgdm-lock-overlay__dialog">';
-  echo '<h3 class="ptcgdm-lock-overlay__title">Inventory locked</h3>';
-  echo '<p class="ptcgdm-lock-overlay__help">Enter your encryption password to unlock inventory data for this session.</p>';
-  echo '<label class="ptcgdm-lock-overlay__field" for="ptcgdm-lock-overlay-password">Password</label>';
-  echo '<input type="password" id="ptcgdm-lock-overlay-password" class="ptcgdm-security__input ptcgdm-lock-overlay__input" autocomplete="current-password" />';
-  echo '<div class="ptcgdm-lock-overlay__actions">';
-  echo '<button type="button" class="ptcgdm-security__button" data-action="overlay-unlock">Unlock</button>';
-  echo '</div>';
-  echo '<div class="ptcgdm-lock-overlay__status" data-lock-overlay-status aria-live="polite"></div>';
-  echo '</div>';
-  echo '</div>';
-
   echo '</div>';
 }
 
@@ -372,6 +359,19 @@ function ptcgdm_get_admin_ui_content() {
         .ptcgdm-admin-ui__tab { display: inline-block; width: auto; margin-right: 8px; }
       }
     </style>
+
+    <div class="ptcgdm-lock-overlay" data-lock-overlay="1" hidden>
+      <div class="ptcgdm-lock-overlay__dialog">
+        <h3 class="ptcgdm-lock-overlay__title">Inventory locked</h3>
+        <p class="ptcgdm-lock-overlay__help">Enter your encryption password to unlock inventory data for this session.</p>
+        <label class="ptcgdm-lock-overlay__field" for="ptcgdm-lock-overlay-password">Password</label>
+        <input type="password" id="ptcgdm-lock-overlay-password" class="ptcgdm-security__input ptcgdm-lock-overlay__input" autocomplete="current-password" />
+        <div class="ptcgdm-lock-overlay__actions">
+          <button type="button" class="ptcgdm-security__button" data-action="overlay-unlock">Unlock</button>
+        </div>
+        <div class="ptcgdm-lock-overlay__status" data-lock-overlay-status aria-live="polite"></div>
+      </div>
+    </div>
 
     <div class="ptcgdm-admin-ui__shell">
       <aside class="ptcgdm-admin-ui__sidebar" aria-label="Inventory navigation">
