@@ -464,7 +464,7 @@ function ptcgdm_resolve_inventory_dataset_key($value = null) {
         return ptcgdm_normalize_inventory_dataset_key($value[$candidate]);
       }
     }
-    return 'pokemon';
+    return ptcgdm_get_active_inventory_dataset();
   }
 
   return ptcgdm_normalize_inventory_dataset_key($value);
