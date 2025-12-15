@@ -9590,20 +9590,6 @@ function ptcgdm_sync_inventory_products(array $entries, array $context = []) {
         $display_name = $base_product_name;
       }
 
-      $processed_count++;
-      $summary['processed'] = $processed_count;
-      if (ptcgdm_should_update_inventory_sync_progress($processed_count, $total_count, $progress_step)) {
-        $progress_label = ptcgdm_format_inventory_sync_card_label($display_name, $card_id, $card_number);
-        ptcgdm_set_inventory_sync_progress([
-          'run_id' => $run_id,
-          'processed_count' => $processed_count,
-          'total_count' => $total_count,
-          'card_index' => $processed_count,
-          'current_card_label' => $progress_label,
-          'dataset' => $dataset_key,
-        ], $dataset_key);
-      }
-
       $image_url = '';
       if (!empty($card_data['images']['large']) && filter_var($card_data['images']['large'], FILTER_VALIDATE_URL)) {
         $image_url = $card_data['images']['large'];
@@ -9718,6 +9704,20 @@ function ptcgdm_sync_inventory_products(array $entries, array $context = []) {
         }
       } else {
         ptcgdm_refresh_product_image_cache($product);
+      }
+
+      $processed_count++;
+      $summary['processed'] = $processed_count;
+      if (ptcgdm_should_update_inventory_sync_progress($processed_count, $total_count, $progress_step)) {
+        $progress_label = ptcgdm_format_inventory_sync_card_label($display_name, $card_id, $card_number);
+        ptcgdm_set_inventory_sync_progress([
+          'run_id' => $run_id,
+          'processed_count' => $processed_count,
+          'total_count' => $total_count,
+          'card_index' => $processed_count,
+          'current_card_label' => $progress_label,
+          'dataset' => $dataset_key,
+        ], $dataset_key);
       }
 
       $synced_skus[$sku] = true;
