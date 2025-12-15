@@ -7897,6 +7897,11 @@ function ptcgdm_schedule_inventory_sync_job($job_id, $dataset_key = '', $scope =
     $scheduled = (bool) wp_schedule_single_event(time() + 1, 'ptcgdm_run_sync_job', [$job_id, $dataset_key, $scope]);
   }
 
+  if ($scheduled && function_exists('spawn_cron')) {
+    // Best-effort nudge to prompt WP-Cron to run soon after scheduling.
+    @spawn_cron();
+  }
+
   return (bool) $scheduled;
 }
 
@@ -8197,9 +8202,12 @@ function ptcgdm_launch_inventory_sync_job_async_request($job_id, $dataset_key = 
   ptcgdm_set_active_inventory_sync_scope($scope);
 
   $args = [
-    'timeout'  => 0.01,
+    'timeout'  => 3,
     'blocking' => false,
     'sslverify'=> apply_filters('https_local_ssl_verify', false),
+    'headers'  => [
+      'Connection' => 'close',
+    ],
     'body'     => [
       'action'     => 'ptcgdm_run_inventory_sync_job_async',
       'token'      => $token,
