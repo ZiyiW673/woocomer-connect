@@ -389,14 +389,15 @@ function ptcgdm_get_inventory_path_for_dataset($dataset_key = '') {
 }
 
 function ptcgdm_get_encrypted_inventory_path_for_dataset($dataset) {
-  $dir = ptcgdm_get_inventory_dir();
-  $dataset = ptcgdm_normalize_inventory_dataset_key($dataset);
+  $dir      = ptcgdm_get_inventory_dir();
+  $dataset  = ptcgdm_normalize_inventory_dataset_key($dataset);
+  $slug     = ptcgdm_slugify_inventory_dataset_key($dataset);
 
   // Mirror plaintext naming:
   // pokemon   -> card-inventory.enc.json
-  // one_piece -> card-inventory-one_piece.enc.json
+  // one_piece -> card-inventory-one-piece.enc.json
   $base = 'card-inventory';
-  $suffix = ($dataset && $dataset !== 'pokemon') ? '-' . $dataset : '';
+  $suffix = ($dataset && $dataset !== 'pokemon') ? '-' . $slug : '';
   return trailingslashit($dir) . $base . $suffix . '.enc.json';
 }
 
