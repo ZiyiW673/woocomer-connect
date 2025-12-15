@@ -9193,13 +9193,24 @@ function ptcgdm_remove_inventory_card_entry($card_id, $dataset_key = '') {
   $removed_entry = null;
   $filtered      = [];
 
+  $id_keys = ['id', 'cardId', 'card_id', 'cardID', 'card', 'identifier'];
+
   foreach ($data['cards'] as $entry) {
     if (!is_array($entry)) {
       continue;
     }
 
-    $entry_id = isset($entry['id']) ? trim((string) $entry['id']) : '';
-    if ($entry_id === $card_id) {
+    $entry_id = '';
+    foreach ($id_keys as $key) {
+      if (isset($entry[$key])) {
+        $entry_id = trim((string) $entry[$key]);
+        if ($entry_id !== '') {
+          break;
+        }
+      }
+    }
+
+    if ($entry_id !== '' && strcasecmp($entry_id, $card_id) === 0) {
       $removed_entry = $entry;
       continue;
     }
