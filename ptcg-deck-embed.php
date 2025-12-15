@@ -3454,6 +3454,7 @@ function ptcgdm_render_builder(array $config = []){
           }
           return { success: false, error: errorMessage };
         }
+        const encryptedMode = await isEncryptedInventoryMode();
         const labelFallback = cardName || cardId;
         let restoreLabel = 'Delete';
         if(button){
@@ -3464,11 +3465,35 @@ function ptcgdm_render_builder(array $config = []){
           button.disabled = true;
           button.textContent = 'Deleting…';
         }
+
+        if (encryptedMode) {
+          removeInventoryEntryLocal(cardId);
+          try {
+            await saveEncryptedInventorySnapshot();
+          } catch (err) {
+            const errorMessage = err && err.message ? err.message : err;
+            if(!suppressAlert){
+              alert(`Delete failed: ${errorMessage}`);
+            }
+            if(button){
+              button.disabled = false;
+              button.textContent = button.dataset.originalLabel || restoreLabel || 'Delete';
+            }
+            return {
+              success: false,
+              error: errorMessage,
+            };
+          }
+        }
+
         const payload = new FormData();
         payload.append('action', action);
         payload.append('nonce', nonce);
         payload.append('cardId', cardId);
         payload.append('datasetKey', DATASET_KEY);
+        if (encryptedMode) {
+          payload.append('skipInventory', '1');
+        }
         try {
           const response = await fetch(AJAX_URL, { method: 'POST', body: payload });
           const result = await safeParseJsonResponse(response);
@@ -3476,7 +3501,9 @@ function ptcgdm_render_builder(array $config = []){
             throw new Error(resolveResponseError(result, response));
           }
           const data = result.data || {};
-          removeInventoryEntryLocal(cardId);
+          if (!encryptedMode) {
+            removeInventoryEntryLocal(cardId);
+          }
           const resolvedName = data.cardName || labelFallback;
           const messages = [];
           if(data.message){
@@ -4898,6 +4925,44 @@ function ptcgdm_render_builder(array $config = []){
         updateEncryptionDependentButtons();
         return encryptionMeta;
       }
+      async function isEncryptedInventoryMode(){
+        if (!IS_INVENTORY) return false;
+        const meta = await fetchEncryptionMetaCached();
+        const helper = getInventoryCryptoHelper();
+        const helperStatus = helper && typeof helper.status === 'string' ? helper.status : '';
+        return (meta && meta.status === 'encrypted_v1') || helperStatus === 'encrypted_v1' || helperStatus === 'encrypted_v1_locked';
+      }
+      async function saveEncryptedInventorySnapshot(){
+        const entriesForSave = updateJSON();
+        const plaintextContent = deckJsonCache;
+        const encryptedMeta = {
+          content_length: plaintextContent ? plaintextContent.length : 0,
+          card_count: Array.isArray(entriesForSave) ? entriesForSave.length : 0,
+          dataset: DATASET_KEY,
+        };
+        const masterKey = await getMasterKeyFromBridge(['encrypt', 'decrypt']);
+        if (!masterKey) {
+          throw new Error('Inventory is encrypted. Please unlock it in the Security tab before saving.');
+        }
+        const encryptedBlob = await encryptBlobWithKey(masterKey, new TextEncoder().encode(plaintextContent));
+        const res = await fetch(`${API_BASE}/encrypted-inventory`, {
+          method: 'POST',
+          credentials: 'include',
+          headers: withRestNonce({ 'Content-Type': 'application/json' }),
+          body: JSON.stringify({ dataset: DATASET_KEY, blob: encryptedBlob, meta: encryptedMeta }),
+        });
+        if (!res.ok) {
+          let detail = '';
+          try {
+            detail = await res.text();
+          } catch (err) {
+            detail = '';
+          }
+          const suffix = detail ? ` (${detail.trim()})` : '';
+          throw new Error(`Failed to save encrypted inventory.${suffix}`);
+        }
+        return true;
+      }
       async function getMasterKeyFromBridge(usages = ['decrypt']){
         const bridge = resolveZkBridge();
         if (!bridge || typeof bridge.getMasterKeyBytes !== 'function') return null;
@@ -5359,6 +5424,11 @@ add_action('wp_ajax_ptcgdm_delete_inventory_card', function(){
 
   $dataset_key = ptcgdm_resolve_inventory_dataset_key($_POST);
 
+  $skip_inventory = !empty($_POST['skipInventory']);
+  $meta = ptcgdm_get_encryption_meta();
+  $status = is_array($meta) ? ($meta['status'] ?? 'unencrypted') : 'unencrypted';
+  $encrypted_at_rest = ($status === 'encrypted_v1');
+
   $card_id = '';
   foreach (['cardId', 'card_id', 'id'] as $key) {
     if (isset($_POST[$key])) {
@@ -5381,13 +5451,15 @@ add_action('wp_ajax_ptcgdm_delete_inventory_card', function(){
     ));
   }
 
-  $remove_result = ptcgdm_remove_inventory_card_entry($card_id, $dataset_key);
-  if (is_wp_error($remove_result)) {
-    wp_send_json_error($remove_result->get_error_message());
-  }
+  if (!$skip_inventory && !$encrypted_at_rest) {
+    $remove_result = ptcgdm_remove_inventory_card_entry($card_id, $dataset_key);
+    if (is_wp_error($remove_result)) {
+      wp_send_json_error($remove_result->get_error_message());
+    }
 
-  if (empty($remove_result['removed'])) {
-    wp_send_json_error('Card not found in inventory.', 404);
+    if (empty($remove_result['removed'])) {
+      wp_send_json_error('Card not found in inventory.', 404);
+    }
   }
 
   $product_result = ptcgdm_delete_inventory_product_by_card($card_id);
