@@ -9443,16 +9443,21 @@ function ptcgdm_sync_inventory_products(array $entries, array $context = []) {
   if ($progress_step < 1) {
     $progress_step = 5;
   }
-
   if (is_array($prepared_entries_override)) {
     $prepared_entries = $prepared_entries_override;
   } else {
     $prepared_entries = ptcgdm_prepare_inventory_sync_entries($entries);
+
+    if ($start_offset > 0 || $chunk_limit > 0) {
+      $prepared_entries = array_slice($prepared_entries, $start_offset, $chunk_limit > 0 ? $chunk_limit : null);
+    }
   }
-  if ($start_offset > 0 || $chunk_limit > 0) {
-    $prepared_entries = array_slice($prepared_entries, $start_offset, $chunk_limit > 0 ? $chunk_limit : null);
+
+  if ($total_count_override > 0) {
+    $total_count = $total_count_override;
+  } else {
+    $total_count = $start_offset + count($prepared_entries);
   }
-  $total_count = $total_count_override > 0 ? max($total_count_override, $start_offset + count($prepared_entries)) : count($prepared_entries);
   $summary['total'] = $total_count;
 
   ptcgdm_set_inventory_sync_progress([
@@ -9723,7 +9728,7 @@ function ptcgdm_sync_inventory_products(array $entries, array $context = []) {
       $synced_skus[$sku] = true;
     }
 
-    $has_more = ($start_offset + count($prepared_entries)) < $total_count;
+    $has_more = $processed_count < $total_count;
     if ($sync_scope === 'full' && !$has_more) {
       ptcgdm_zero_unlisted_inventory_products($synced_skus, $dataset_key);
     }
@@ -9737,7 +9742,7 @@ function ptcgdm_sync_inventory_products(array $entries, array $context = []) {
 
   $summary['processed'] = $processed_count;
   $summary['processed_chunk'] = max(0, $processed_count - $start_offset);
-  $summary['has_more'] = ($start_offset + $summary['processed_chunk']) < $total_count;
+  $summary['has_more'] = $processed_count < $total_count;
 
   return $summary;
 }
