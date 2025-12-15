@@ -388,6 +388,35 @@ function ptcgdm_get_inventory_path_for_dataset($dataset_key = '') {
   return $dir . ptcgdm_get_inventory_filename_for_dataset($dataset_key);
 }
 
+function ptcgdm_find_existing_inventory_path($dataset_key = '') {
+  $dir = trailingslashit(ptcgdm_get_inventory_dir());
+  $paths = [];
+
+  // Preferred filename for current versions.
+  $paths[] = $dir . ptcgdm_get_inventory_filename_for_dataset($dataset_key);
+
+  $normalized = ptcgdm_normalize_inventory_dataset_key($dataset_key);
+  if ($normalized !== 'pokemon') {
+    // Legacy underscore variant (card-inventory-one_piece.json).
+    $paths[] = $dir . sprintf('card-inventory-%s.json', $normalized);
+
+    // Slug variant to catch any older/differently slugged filenames.
+    $slug = ptcgdm_slugify_inventory_dataset_key($normalized);
+    $paths[] = $dir . sprintf('card-inventory-%s.json', $slug);
+  }
+
+  $paths = array_values(array_unique($paths));
+
+  foreach ($paths as $path) {
+    if (file_exists($path)) {
+      return $path;
+    }
+  }
+
+  // Fall back to the canonical first entry if nothing exists yet.
+  return $paths[0];
+}
+
 function ptcgdm_get_encrypted_inventory_path_for_dataset($dataset) {
   $dir      = ptcgdm_get_inventory_dir();
   $dataset  = ptcgdm_normalize_inventory_dataset_key($dataset);
@@ -9167,7 +9196,7 @@ function ptcgdm_remove_inventory_card_entry($card_id, $dataset_key = '') {
   }
 
   $dir  = trailingslashit(ptcgdm_get_inventory_dir());
-  $path = ptcgdm_get_inventory_path_for_dataset($dataset_key);
+  $path = ptcgdm_find_existing_inventory_path($dataset_key);
 
   if (!file_exists($path)) {
     return ['removed' => false, 'path' => $path];
