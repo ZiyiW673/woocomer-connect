@@ -4319,6 +4319,42 @@ function ptcgdm_render_builder(array $config = []){
         }
       }
 
+      async function triggerEncryptedManualSync(plaintextContent){
+        if (!IS_INVENTORY) return null;
+        const action = SAVE_CONFIG.manualSyncAction || '';
+        const nonce = SAVE_CONFIG.manualSyncNonce || '';
+        if (!action || !nonce) return null;
+
+        const payload = new FormData();
+        payload.append('action', action);
+        payload.append('nonce', nonce);
+        payload.append('datasetKey', DATASET_KEY);
+        if (typeof plaintextContent === 'string' && plaintextContent.trim()) {
+          payload.append('content', plaintextContent);
+        }
+
+        const response = await fetch(AJAX_URL, { method: 'POST', body: payload });
+        const result = await safeParseJsonResponse(response);
+        if (!response.ok || !result?.success) {
+          return { syncError: resolveResponseError(result, response) };
+        }
+
+        const data = result.data || {};
+        const status = normalizeManualSyncStatus(data.status);
+        const info = {
+          syncQueued: !!(data.syncQueued || data.queued),
+          syncStatus: status,
+        };
+        if (status.state === 'success') {
+          info.synced = true;
+        }
+        if (typeof data.message === 'string' && data.message) {
+          info.syncMessage = data.message;
+        }
+
+        return info;
+      }
+
       async function saveDeck(){
         if (isSavingDeck) {
           return;
@@ -4397,6 +4433,13 @@ function ptcgdm_render_builder(array $config = []){
               throw new Error(`Failed to save encrypted inventory.${suffix}`);
             }
             responseData = { url: SAVE_CONFIG.autoLoadUrl || '', dataset: DATASET_KEY, encrypted: true };
+            const syncInfo = await triggerEncryptedManualSync(plaintextContent);
+            if (syncInfo) {
+              responseData = Object.assign(responseData, syncInfo);
+              if (syncInfo.syncError) {
+                renderSaveProgress(syncInfo.syncError);
+              }
+            }
           } else {
             const r = await fetch(AJAX_URL, { method:'POST', body });
             const j = await safeParseJsonResponse(r);
@@ -4410,19 +4453,21 @@ function ptcgdm_render_builder(array $config = []){
           const success = SAVE_CONFIG.successMessage || 'Saved!\n';
           const url = responseData?.url || '';
           let extraNotice = '';
-          if (IS_INVENTORY) {
-            const syncStatus = responseData?.syncStatus;
-            if (responseData?.synced) {
-              const syncMsg = (syncStatus && syncStatus.message) ? syncStatus.message : 'Inventory synced to WooCommerce.';
-              extraNotice = `\n${syncMsg}`;
-              renderSaveProgress(syncMsg);
-            } else if (responseData?.syncQueued) {
-              const queuedMsg = (syncStatus && syncStatus.message) ? syncStatus.message : 'Inventory sync queued in background.';
-              extraNotice = `\n${queuedMsg}`;
-              renderSaveProgress(queuedMsg);
-            } else if (responseData?.syncError) {
-              extraNotice = `\nSync warning: ${responseData.syncError}`;
-              renderSaveProgress(responseData.syncError);
+            if (IS_INVENTORY) {
+              const syncStatus = responseData?.syncStatus;
+              if (responseData?.synced) {
+                const syncMsg = (syncStatus && syncStatus.message) ? syncStatus.message : 'Inventory synced to WooCommerce.';
+                extraNotice = `\n${syncMsg}`;
+                renderSaveProgress(syncMsg);
+              } else if (responseData?.syncQueued) {
+                const queuedMsg = (syncStatus && syncStatus.message)
+                  ? syncStatus.message
+                  : (responseData.syncMessage || 'Inventory sync queued in background.');
+                extraNotice = `\n${queuedMsg}`;
+                renderSaveProgress(queuedMsg);
+              } else if (responseData?.syncError) {
+                extraNotice = `\nSync warning: ${responseData.syncError}`;
+                renderSaveProgress(responseData.syncError);
             } else if (encryptedMode) {
               renderSaveProgress('Encrypted inventory saved.');
               extraNotice = '\nEncrypted inventory saved.';
