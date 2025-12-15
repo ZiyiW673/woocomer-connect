@@ -8137,9 +8137,17 @@ function ptcgdm_launch_inventory_sync_async_request($dataset_key = '', $scope = 
 }
 
 function ptcgdm_trigger_inventory_sync($dataset_key = '', $scope = 'full') {
+  $scope = ptcgdm_normalize_inventory_sync_scope($scope);
+
+  if ($scope === 'scoped') {
+    // Manual scoped sync now runs exclusively via chunked jobs; block legacy
+    // cron/loopback triggers to avoid clobbering job progress.
+    error_log('[PTCGDM][Sync] Legacy trigger blocked for scoped manual sync.');
+    return true;
+  }
+
   // Try WP-Cron first; if unavailable or scheduling fails, fall back to
   // launching an async admin-ajax request so the sync actually runs.
-  $scope = ptcgdm_normalize_inventory_sync_scope($scope);
   $queued = ptcgdm_queue_inventory_sync($dataset_key, $scope);
   $cron_disabled = defined('DISABLE_WP_CRON') && DISABLE_WP_CRON;
 
@@ -8183,6 +8191,14 @@ function ptcgdm_run_inventory_sync_job_handler($job_arg = '', $dataset_key = '',
 
   $job = ptcgdm_get_inventory_sync_job($job_id) ?: [];
   if (isset($job['status']) && in_array($job['status'], ['done', 'error'], true)) {
+    return;
+  }
+
+  // Prevent overlapping executions from different runners from clobbering
+  // job progress; requeue if another sync is already in-flight.
+  if (ptcgdm_is_inventory_syncing()) {
+    error_log('[PTCGDM][Sync] Another sync is active; requeueing job ' . $job_id);
+    ptcgdm_requeue_inventory_sync_job($job_id, $dataset_key, $scope);
     return;
   }
 
