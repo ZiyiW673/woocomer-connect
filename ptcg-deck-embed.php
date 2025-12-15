@@ -5776,6 +5776,33 @@ function ptcgdm_handle_inventory_sync_async_request() {
 add_action('wp_ajax_ptcgdm_run_inventory_sync_async', 'ptcgdm_handle_inventory_sync_async_request');
 add_action('wp_ajax_nopriv_ptcgdm_run_inventory_sync_async', 'ptcgdm_handle_inventory_sync_async_request');
 
+function ptcgdm_handle_inventory_sync_job_async_request() {
+  $token = isset($_REQUEST['token']) ? sanitize_text_field(wp_unslash($_REQUEST['token'])) : '';
+  $expected = ptcgdm_get_inventory_sync_async_token();
+  $tokens_match = ($token !== '' && $expected !== '')
+    ? (function_exists('hash_equals') ? hash_equals($expected, $token) : $expected === $token)
+    : false;
+
+  if (!$tokens_match) {
+    wp_send_json_error('Invalid token', 403);
+  }
+
+  $job_id = isset($_REQUEST['jobId']) ? ptcgdm_normalize_inventory_sync_job_id(wp_unslash($_REQUEST['jobId'])) : '';
+  $dataset_key = ptcgdm_resolve_inventory_dataset_key($_REQUEST);
+  $scope = ptcgdm_normalize_inventory_sync_scope(isset($_REQUEST['scope']) ? $_REQUEST['scope'] : ptcgdm_get_active_inventory_sync_scope());
+
+  if ($job_id === '') {
+    wp_send_json_error('Missing jobId', 400);
+  }
+
+  ptcgdm_run_inventory_sync_job_handler($job_id, $dataset_key, $scope);
+
+  wp_send_json_success(['synced' => true]);
+}
+
+add_action('wp_ajax_ptcgdm_run_inventory_sync_job_async', 'ptcgdm_handle_inventory_sync_job_async_request');
+add_action('wp_ajax_nopriv_ptcgdm_run_inventory_sync_job_async', 'ptcgdm_handle_inventory_sync_job_async_request');
+
 function ptcgdm_lookup_card_preview($card_id){
   static $cache = [];
   $key = trim((string) $card_id);
@@ -7882,19 +7909,23 @@ function ptcgdm_requeue_inventory_sync_job($job_id, $dataset_key = '', $scope = 
   $dataset_key = ptcgdm_normalize_inventory_dataset_key($dataset_key);
   $scope = ptcgdm_normalize_inventory_sync_scope($scope);
 
+  $scheduled = false;
+
   if (function_exists('as_enqueue_async_action')) {
     $scheduled = as_enqueue_async_action('ptcgdm_run_sync_job', [
       'jobId'   => $job_id,
       'dataset' => $dataset_key,
       'scope'   => $scope,
     ], 'ptcgdm');
-    if ($scheduled) {
-      return true;
-    }
   }
 
   if (function_exists('wp_schedule_single_event')) {
-    return (bool) wp_schedule_single_event(time() + 1, 'ptcgdm_run_sync_job', [$job_id, $dataset_key, $scope]);
+    $scheduled = $scheduled || (bool) wp_schedule_single_event(time() + 1, 'ptcgdm_run_sync_job', [$job_id, $dataset_key, $scope]);
+  }
+
+  if ($scheduled) {
+    ptcgdm_launch_inventory_sync_job_async_request($job_id, $dataset_key, $scope);
+    return true;
   }
 
   return false;
@@ -8138,6 +8169,53 @@ function ptcgdm_launch_inventory_sync_async_request($dataset_key = '', $scope = 
   }
 
   return false;
+}
+
+function ptcgdm_launch_inventory_sync_job_async_request($job_id, $dataset_key = '', $scope = 'full') {
+  if (!function_exists('wp_safe_remote_post') || !function_exists('admin_url')) {
+    return false;
+  }
+
+  $job_id = ptcgdm_normalize_inventory_sync_job_id($job_id);
+  if ($job_id === '') {
+    return false;
+  }
+
+  $token = ptcgdm_get_inventory_sync_async_token();
+  if ($token === '') {
+    return false;
+  }
+
+  $url = admin_url('admin-ajax.php');
+  if (!$url) {
+    return false;
+  }
+
+  $dataset_key = ptcgdm_normalize_inventory_dataset_key($dataset_key);
+  $scope = ptcgdm_normalize_inventory_sync_scope($scope);
+  ptcgdm_set_active_inventory_dataset($dataset_key);
+  ptcgdm_set_active_inventory_sync_scope($scope);
+
+  $args = [
+    'timeout'  => 0.01,
+    'blocking' => false,
+    'sslverify'=> apply_filters('https_local_ssl_verify', false),
+    'body'     => [
+      'action'     => 'ptcgdm_run_inventory_sync_job_async',
+      'token'      => $token,
+      'datasetKey' => $dataset_key,
+      'scope'      => $scope,
+      'jobId'      => $job_id,
+    ],
+  ];
+
+  $response = wp_safe_remote_post($url, $args);
+  if (is_wp_error($response)) {
+    return false;
+  }
+
+  $code = (int) wp_remote_retrieve_response_code($response);
+  return $code === 200;
 }
 
 function ptcgdm_trigger_inventory_sync($dataset_key = '', $scope = 'full') {
