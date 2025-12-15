@@ -5386,13 +5386,13 @@ add_action('wp_ajax_ptcgdm_save_inventory', function(){
   }
 
   if ($prefer_async_sync) {
-    $syncQueued = ptcgdm_trigger_inventory_sync($dataset_key);
+    $syncQueued = ptcgdm_trigger_inventory_sync($dataset_key, 'scoped');
     if ($syncQueued) {
       $syncStatus = ptcgdm_get_inventory_sync_status($dataset_key);
     } elseif (is_wp_error($syncQueued)) {
       $syncError = $syncQueued->get_error_message();
     } else {
-      $syncResult = ptcgdm_run_inventory_sync_now(['dataset' => $dataset_key]);
+      $syncResult = ptcgdm_run_inventory_sync_now(['dataset' => $dataset_key, 'scope' => 'scoped']);
       if ($syncResult === true) {
         $syncStatus = ptcgdm_get_inventory_sync_status($dataset_key);
       } elseif (is_wp_error($syncResult)) {
@@ -5402,11 +5402,11 @@ add_action('wp_ajax_ptcgdm_save_inventory', function(){
       }
     }
   } else {
-    $syncResult = ptcgdm_run_inventory_sync_now(['dataset' => $dataset_key]);
+    $syncResult = ptcgdm_run_inventory_sync_now(['dataset' => $dataset_key, 'scope' => 'scoped']);
     if ($syncResult === true) {
       $syncStatus = ptcgdm_get_inventory_sync_status($dataset_key);
     } else {
-      $syncQueued = ptcgdm_trigger_inventory_sync($dataset_key);
+      $syncQueued = ptcgdm_trigger_inventory_sync($dataset_key, 'scoped');
       if (is_wp_error($syncResult)) {
         $syncError = $syncResult->get_error_message();
       }
@@ -5492,7 +5492,7 @@ add_action('wp_ajax_ptcgdm_delete_inventory_card', function(){
     $message .= ' WooCommerce product deleted.';
   }
 
-  $syncQueued = ptcgdm_trigger_inventory_sync($dataset_key);
+  $syncQueued = ptcgdm_trigger_inventory_sync($dataset_key, 'scoped');
 
   $response = [
     'cardId'         => $card_id,
@@ -5591,7 +5591,7 @@ add_action('wp_ajax_ptcgdm_manual_inventory_sync', function(){
     'dataset' => $dataset_key,
   ]), $dataset_key);
 
-  $syncQueued = ptcgdm_trigger_inventory_sync($dataset_key);
+  $syncQueued = ptcgdm_trigger_inventory_sync($dataset_key, 'scoped');
   error_log('[PTCGDM][ManualSync] trigger_inventory_sync result: ' . var_export($syncQueued, true));
   error_log('[PTCGDM][ManualSync] dataset_key=' . $dataset_key);
   if ($syncQueued) {
@@ -5639,7 +5639,9 @@ function ptcgdm_handle_inventory_sync_async_request() {
   }
 
   $dataset_key = ptcgdm_resolve_inventory_dataset_key($_REQUEST);
+  $scope = ptcgdm_normalize_inventory_sync_scope(isset($_REQUEST['scope']) ? $_REQUEST['scope'] : ptcgdm_get_active_inventory_sync_scope());
   ptcgdm_set_active_inventory_dataset($dataset_key);
+  ptcgdm_set_active_inventory_sync_scope($scope);
   ptcgdm_run_inventory_sync_event();
 
   wp_send_json_success(['synced' => true]);
@@ -7669,6 +7671,20 @@ function ptcgdm_get_active_inventory_dataset() {
   return ptcgdm_normalize_inventory_dataset_key($stored);
 }
 
+function ptcgdm_normalize_inventory_sync_scope($scope = 'full') {
+  $scope = is_string($scope) ? strtolower(trim($scope)) : '';
+  return $scope === 'scoped' ? 'scoped' : 'full';
+}
+
+function ptcgdm_set_active_inventory_sync_scope($scope = 'full') {
+  update_option('ptcgdm_inventory_sync_scope', ptcgdm_normalize_inventory_sync_scope($scope), false);
+}
+
+function ptcgdm_get_active_inventory_sync_scope() {
+  $stored = get_option('ptcgdm_inventory_sync_scope', 'full');
+  return ptcgdm_normalize_inventory_sync_scope($stored);
+}
+
 function ptcgdm_determine_inventory_sync_run_id($preferred = '') {
   $preferred = is_string($preferred) ? trim($preferred) : '';
   if ($preferred !== '') {
@@ -7683,8 +7699,10 @@ function ptcgdm_determine_inventory_sync_run_id($preferred = '') {
   return ptcgdm_generate_inventory_sync_run_id();
 }
 
-function ptcgdm_queue_inventory_sync($dataset_key = '') {
+function ptcgdm_queue_inventory_sync($dataset_key = '', $scope = 'full') {
+  $scope = ptcgdm_normalize_inventory_sync_scope($scope);
   ptcgdm_set_active_inventory_dataset($dataset_key);
+  ptcgdm_set_active_inventory_sync_scope($scope);
   $hook = 'ptcgdm_run_inventory_sync';
   $event_scheduled = false;
   $spawn_triggered = false;
@@ -7752,7 +7770,7 @@ function ptcgdm_get_inventory_sync_async_token() {
   return $token;
 }
 
-function ptcgdm_launch_inventory_sync_async_request($dataset_key = '') {
+function ptcgdm_launch_inventory_sync_async_request($dataset_key = '', $scope = 'full') {
   if (!function_exists('wp_safe_remote_post') || !function_exists('admin_url')) {
     return false;
   }
@@ -7768,7 +7786,9 @@ function ptcgdm_launch_inventory_sync_async_request($dataset_key = '') {
   }
 
   $dataset_key = ptcgdm_normalize_inventory_dataset_key($dataset_key);
+  $scope = ptcgdm_normalize_inventory_sync_scope($scope);
   ptcgdm_set_active_inventory_dataset($dataset_key);
+  ptcgdm_set_active_inventory_sync_scope($scope);
 
   $args = [
     'timeout'  => 0.01,
@@ -7778,6 +7798,7 @@ function ptcgdm_launch_inventory_sync_async_request($dataset_key = '') {
       'action' => 'ptcgdm_run_inventory_sync_async',
       'token'  => $token,
       'datasetKey' => $dataset_key,
+      'scope'  => $scope,
     ],
   ];
 
@@ -7808,14 +7829,15 @@ function ptcgdm_launch_inventory_sync_async_request($dataset_key = '') {
   return false;
 }
 
-function ptcgdm_trigger_inventory_sync($dataset_key = '') {
+function ptcgdm_trigger_inventory_sync($dataset_key = '', $scope = 'full') {
   // Try WP-Cron first; if unavailable or scheduling fails, fall back to
   // launching an async admin-ajax request so the sync actually runs.
-  $queued = ptcgdm_queue_inventory_sync($dataset_key);
+  $scope = ptcgdm_normalize_inventory_sync_scope($scope);
+  $queued = ptcgdm_queue_inventory_sync($dataset_key, $scope);
   $cron_disabled = defined('DISABLE_WP_CRON') && DISABLE_WP_CRON;
 
   if (!$queued || $cron_disabled) {
-    if (ptcgdm_launch_inventory_sync_async_request($dataset_key)) {
+    if (ptcgdm_launch_inventory_sync_async_request($dataset_key, $scope)) {
       return true;
     }
 
@@ -7823,12 +7845,13 @@ function ptcgdm_trigger_inventory_sync($dataset_key = '') {
     // sync doesn't remain stuck in a queued state.
     if (!$queued) {
       ptcgdm_set_active_inventory_dataset($dataset_key);
+      ptcgdm_set_active_inventory_sync_scope($scope);
       ptcgdm_run_inventory_sync_event();
       return true;
     }
 
     // If cron was scheduled, but async failed, try to re-queue once more.
-    return ptcgdm_queue_inventory_sync($dataset_key);
+    return ptcgdm_queue_inventory_sync($dataset_key, $scope);
   }
 
   return true;
@@ -7898,7 +7921,10 @@ function ptcgdm_run_inventory_sync_now($args = []) {
     $run_id = isset($args['run_id']) ? (string) $args['run_id'] : '';
     $run_id = ptcgdm_determine_inventory_sync_run_id($run_id);
     $dataset_key = ptcgdm_resolve_inventory_dataset_key($args);
+    $sync_scope = ptcgdm_normalize_inventory_sync_scope(isset($args['scope']) ? $args['scope'] : ptcgdm_get_active_inventory_sync_scope());
     ptcgdm_set_active_inventory_dataset($dataset_key);
+    ptcgdm_set_active_inventory_sync_scope($sync_scope);
+    error_log(sprintf('[PTCGDM][Sync] scope=%s dataset=%s', $sync_scope, $dataset_key));
 
     $provided_entries = null;
     $has_entries_override = false;
@@ -7961,7 +7987,7 @@ function ptcgdm_run_inventory_sync_now($args = []) {
 
       $raw = trim((string) $raw);
       if ($raw === '') {
-        $sync_summary = ptcgdm_sync_inventory_products([], ['run_id' => $run_id, 'dataset' => $dataset_key]);
+        $sync_summary = ptcgdm_sync_inventory_products([], ['run_id' => $run_id, 'dataset' => $dataset_key, 'scope' => $sync_scope]);
         $processed = isset($sync_summary['processed']) ? (int) $sync_summary['processed'] : 0;
         $total = isset($sync_summary['total']) ? (int) $sync_summary['total'] : 0;
         ptcgdm_set_inventory_sync_status('success', __('Inventory sync completed successfully.', 'ptcgdm'), ptcgdm_build_inventory_sync_status_extra($run_id, [
@@ -7996,7 +8022,7 @@ function ptcgdm_run_inventory_sync_now($args = []) {
     $entries = ptcgdm_filter_inventory_entries_by_dataset($entries, $dataset_key);
 
     try {
-      $sync_summary = ptcgdm_sync_inventory_products($entries, ['run_id' => $run_id, 'dataset' => $dataset_key]);
+      $sync_summary = ptcgdm_sync_inventory_products($entries, ['run_id' => $run_id, 'dataset' => $dataset_key, 'scope' => $sync_scope]);
     } catch (Throwable $sync_error) {
       if (defined('WP_DEBUG') && WP_DEBUG) {
         error_log('PTCGDM inventory sync failed: ' . $sync_error->getMessage());
@@ -8046,9 +8072,10 @@ function ptcgdm_run_inventory_sync_now($args = []) {
 
 function ptcgdm_run_inventory_sync_event() {
   $dataset_key = ptcgdm_get_active_inventory_dataset();
+  $sync_scope = ptcgdm_get_active_inventory_sync_scope();
   error_log('[PTCGDM][Cron] ptcgdm_run_inventory_sync fired');
   error_log('[PTCGDM][Cron] active_dataset=' . get_option('ptcgdm_active_inventory_dataset'));
-  ptcgdm_run_inventory_sync_now(['dataset' => $dataset_key]);
+  ptcgdm_run_inventory_sync_now(['dataset' => $dataset_key, 'scope' => $sync_scope]);
 }
 
 add_action('ptcgdm_run_inventory_sync', 'ptcgdm_run_inventory_sync_event');
@@ -8840,6 +8867,36 @@ function ptcgdm_format_inventory_sync_card_label($display_name, $card_id, $card_
   return $label;
 }
 
+function ptcgdm_get_product_game_slug($product_id, $product = null) {
+  if (!($product instanceof WC_Product) && $product_id) {
+    $product = wc_get_product($product_id);
+  }
+
+  if ($product instanceof WC_Product) {
+    $meta_keys = ['_ptcgdm_dataset', '_ptcgdm_game_slug', '_ptcgdm_game'];
+    foreach ($meta_keys as $meta_key) {
+      if (method_exists($product, 'get_meta')) {
+        $value = $product->get_meta($meta_key, true);
+        if ($value !== '') {
+          return ptcgdm_normalize_inventory_dataset_key($value);
+        }
+      }
+    }
+
+    if (method_exists($product, 'get_meta')) {
+      $card_meta = $product->get_meta('_ptcgdm_card_id', true);
+      if ($card_meta) {
+        $detected = ptcgdm_detect_dataset_from_card_id($card_meta);
+        if ($detected !== '') {
+          return $detected;
+        }
+      }
+    }
+  }
+
+  return '';
+}
+
 function ptcgdm_sync_inventory_products(array $entries, array $context = []) {
   $summary = ['processed' => 0, 'total' => 0];
 
@@ -8851,6 +8908,7 @@ function ptcgdm_sync_inventory_products(array $entries, array $context = []) {
   $run_id = isset($context['run_id']) ? (string) $context['run_id'] : '';
   $progress_step = isset($context['progress_step']) ? (int) $context['progress_step'] : 5;
   $dataset_key = ptcgdm_resolve_inventory_dataset_key($context);
+  $sync_scope = ptcgdm_normalize_inventory_sync_scope(isset($context['scope']) ? $context['scope'] : 'full');
   if (function_exists('apply_filters')) {
     $progress_step = (int) apply_filters('ptcgdm_inventory_sync_progress_step', $progress_step, $context);
   }
@@ -8875,6 +8933,7 @@ function ptcgdm_sync_inventory_products(array $entries, array $context = []) {
   ptcgdm_set_inventory_syncing(true);
 
   $processed_count = 0;
+  $skipped_other_game_products = 0;
 
   try {
     $synced_skus = [];
@@ -9026,6 +9085,12 @@ function ptcgdm_sync_inventory_products(array $entries, array $context = []) {
       if ($product_id) {
         $product = wc_get_product($product_id);
         if ($product instanceof WC_Product) {
+          $product_game = ptcgdm_get_product_game_slug($product_id, $product);
+          if ($sync_scope === 'scoped' && $product_game !== '' && $product_game !== $dataset_key) {
+            $skipped_other_game_products++;
+            continue;
+          }
+
           $current_type = method_exists($product, 'get_type') ? $product->get_type() : '';
           if ($requires_variable && $current_type !== 'variable') {
             $class_name = class_exists('WC_Product_Factory') ? WC_Product_Factory::get_product_classname($product_id, 'variable') : '';
@@ -9123,9 +9188,15 @@ function ptcgdm_sync_inventory_products(array $entries, array $context = []) {
       $synced_skus[$sku] = true;
     }
 
-    ptcgdm_zero_unlisted_inventory_products($synced_skus, $dataset_key);
-  } finally {
+    if ($sync_scope === 'full') {
+      ptcgdm_zero_unlisted_inventory_products($synced_skus, $dataset_key);
+    }
+  } finally { 
     ptcgdm_set_inventory_syncing($previous_sync_state);
+  }
+
+  if ($skipped_other_game_products > 0) {
+    error_log(sprintf('[PTCGDM][Sync] skipped %d products due to scoped sync filtering.', $skipped_other_game_products));
   }
 
   $summary['processed'] = $processed_count;
@@ -9172,6 +9243,11 @@ function ptcgdm_zero_unlisted_inventory_products(array $active_skus, $dataset_ke
 
     $sku = trim((string) $product->get_sku());
     if ($sku === '' || isset($active_skus[$sku])) {
+      continue;
+    }
+
+    $product_game = ptcgdm_get_product_game_slug($product->get_id(), $product);
+    if ($product_game !== '' && $product_game !== $dataset_key) {
       continue;
     }
 
