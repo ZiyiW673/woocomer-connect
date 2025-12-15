@@ -534,19 +534,9 @@ function ptcgdm_prune_inventory_backups($dataset_key = '', $max_files = 5) {
 }
 
 function ptcgdm_create_inventory_backup($dataset_key = '') {
-  $path = ptcgdm_get_inventory_path_for_dataset($dataset_key);
-  if (!file_exists($path) || !is_readable($path)) {
-    return false;
-  }
-
-  ptcgdm_ensure_inventory_directory();
-  $backup_path = ptcgdm_build_inventory_backup_path($dataset_key, gmdate('Ymd-His'));
-
-  if (@copy($path, $backup_path)) {
-    ptcgdm_prune_inventory_backups($dataset_key, 5);
-    return $backup_path;
-  }
-
+  // Backups are currently disabled to avoid redundant disk writes and confusion
+  // with dataset-specific inventory files. Keep this function for backward
+  // compatibility but make it a no-op.
   return false;
 }
 
