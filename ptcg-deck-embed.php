@@ -5235,11 +5235,13 @@ add_action('wp_ajax_ptcgdm_save_inventory', function(){
   }
 
   $dataset_key = ptcgdm_resolve_inventory_dataset_key($_POST);
-  if ($dataset_key === 'pokemon') {
-    $detected_dataset = ptcgdm_detect_dataset_from_entries($_POST['content'] ?? '');
-    if ($detected_dataset !== '') {
-      $dataset_key = $detected_dataset;
-    }
+  $detected_dataset = ptcgdm_detect_dataset_from_entries($_POST['content'] ?? '');
+  if ($detected_dataset !== '' && $detected_dataset !== $dataset_key) {
+    wp_send_json_error(sprintf(
+      /* translators: 1: dataset key */
+      __('This inventory looks like it belongs to the %s dataset. Please save it from that game\'s inventory page instead.', 'ptcgdm'),
+      $detected_dataset
+    ));
   }
 
   $content = wp_unslash($_POST['content'] ?? '');
@@ -5340,11 +5342,13 @@ add_action('wp_ajax_ptcgdm_delete_inventory_card', function(){
     wp_send_json_error('Missing card ID', 400);
   }
 
-  if ($dataset_key === 'pokemon') {
-    $detected_dataset = ptcgdm_detect_dataset_from_card_id($card_id);
-    if ($detected_dataset !== '') {
-      $dataset_key = $detected_dataset;
-    }
+  $detected_dataset = ptcgdm_detect_dataset_from_card_id($card_id);
+  if ($detected_dataset !== '' && $detected_dataset !== $dataset_key) {
+    wp_send_json_error(sprintf(
+      /* translators: 1: dataset key */
+      __('This card belongs to the %s dataset. Please remove it from that game\'s inventory page.', 'ptcgdm'),
+      $detected_dataset
+    ));
   }
 
   $remove_result = ptcgdm_remove_inventory_card_entry($card_id, $dataset_key);
@@ -5399,11 +5403,13 @@ add_action('wp_ajax_ptcgdm_manual_inventory_sync', function(){
     if ($entries_override === null) {
       wp_send_json_error(['message' => __('Inventory payload is invalid.', 'ptcgdm')]);
     }
-    if ($dataset_key === 'pokemon') {
-      $detected_dataset = ptcgdm_detect_dataset_from_entries($entries_override);
-      if ($detected_dataset !== '') {
-        $dataset_key = $detected_dataset;
-      }
+    $detected_dataset = ptcgdm_detect_dataset_from_entries($entries_override);
+    if ($detected_dataset !== '' && $detected_dataset !== $dataset_key) {
+      wp_send_json_error(['message' => sprintf(
+        /* translators: 1: dataset key */
+        __('This inventory snapshot belongs to the %s dataset. Please sync it from that game\'s page to avoid changing another dataset.', 'ptcgdm'),
+        $detected_dataset
+      )]);
     }
 
     $entries_override = ptcgdm_filter_inventory_entries_by_dataset($entries_override, $dataset_key);
