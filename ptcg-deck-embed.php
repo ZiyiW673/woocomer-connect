@@ -8243,7 +8243,6 @@ function ptcgdm_run_inventory_sync_job_handler($job_arg = '', $dataset_key = '',
   $total_count = $total;
 
   if (is_array($result)) {
-    $has_more = !empty($result['has_more']);
     if (isset($result['processed_total'])) {
       $processed_total = (int) $result['processed_total'];
     } elseif (isset($result['processed'])) {
@@ -8261,6 +8260,8 @@ function ptcgdm_run_inventory_sync_job_handler($job_arg = '', $dataset_key = '',
       $total_count = (int) $status['total_count'];
     }
   }
+
+  $has_more = $processed_total < $total_count;
 
   $progress = $total_count > 0 ? (int) floor(($processed_total / max(1, $total_count)) * 100) : 0;
 
@@ -9740,9 +9741,9 @@ function ptcgdm_sync_inventory_products(array $entries, array $context = []) {
     error_log(sprintf('[PTCGDM][Sync] skipped %d products due to scoped sync filtering.', $skipped_other_game_products));
   }
 
-  $summary['processed'] = $processed_count;
-  $summary['processed_chunk'] = max(0, $processed_count - $start_offset);
-  $summary['has_more'] = $processed_count < $total_count;
+  $summary['processed'] = (int) $processed_count;
+  $summary['processed_chunk'] = max(0, $summary['processed'] - $start_offset);
+  $summary['has_more'] = $summary['processed'] < $total_count;
 
   return $summary;
 }
