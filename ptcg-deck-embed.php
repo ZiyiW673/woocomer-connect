@@ -260,9 +260,24 @@ function ptcgdm_sanitize_json_filename($filename) {
 function ptcgdm_normalize_inventory_dataset_key($dataset_key = '') {
   $key = strtolower(trim((string) $dataset_key));
   $definitions = ptcgdm_get_dataset_definitions();
+
+  // Accept slug/alias variants (one-piece => one_piece, etc.).
   if (!isset($definitions[$key])) {
+    $slug_candidate = str_replace([' ', '-'], '_', $key);
+    if (isset($definitions[$slug_candidate])) {
+      return $slug_candidate;
+    }
+
+    // If the provided key matches a dataset slug, return its canonical key.
+    foreach ($definitions as $canonical => $_definition) {
+      if ($slug_candidate === ptcgdm_slugify_inventory_dataset_key($canonical)) {
+        return $canonical;
+      }
+    }
+
     $key = 'pokemon';
   }
+
   return $key;
 }
 
@@ -445,8 +460,14 @@ function ptcgdm_get_encrypted_inventory_candidates($dataset_key = '') {
   }
 
   // Also scan for any `.enc.json` payloads in the directory to catch legacy names.
+  $normalized = ptcgdm_normalize_inventory_dataset_key($dataset_key);
   foreach (glob($dir . '*.enc.json') as $path) {
-    if (!in_array($path, $candidates, true)) {
+    $basename = basename($path);
+    $matches_dataset = ($normalized === 'pokemon' && strpos($basename, 'card-inventory.enc.json') === 0)
+      || strpos($basename, $slug) !== false
+      || strpos($basename, $normalized) !== false;
+
+    if ($matches_dataset && !in_array($path, $candidates, true)) {
       $candidates[] = $path;
     }
   }
