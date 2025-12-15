@@ -5721,9 +5721,9 @@ add_action('wp_ajax_ptcgdm_manual_inventory_sync', function(){
     ]);
   }
 
-  // Kick the async runner so the queued job actually starts without relying
+  // Kick the chunked job runner so the queued job actually starts without relying
   // solely on a cron tick.
-  ptcgdm_launch_inventory_sync_async_request($dataset_key, 'scoped');
+  ptcgdm_requeue_inventory_sync_job($run_id, $dataset_key, 'scoped');
 
   wp_send_json_success([
     'queued'     => true,
