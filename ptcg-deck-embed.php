@@ -1396,11 +1396,12 @@ function ptcgdm_render_builder(array $config = []){
       let manualSyncRunId = '';
       let manualSyncPollTimer = 0;
       const MANUAL_SYNC_POLL_INTERVAL = Math.max(3000, Number(SAVE_CONFIG.manualSyncPollInterval) || 5000);
-      const MANUAL_SYNC_MAX_POLL_MS = 3 * 60 * 1000; // 3 minutes
       const MANUAL_SYNC_STATUS_URL = (typeof SAVE_CONFIG.manualSyncStatusRest === 'string' && SAVE_CONFIG.manualSyncStatusRest)
         ? SAVE_CONFIG.manualSyncStatusRest
         : `${API_BASE}/sync-status`;
       let manualSyncPollStartedAt = 0;
+      const MANUAL_SYNC_STALL_MS = 10 * 60 * 1000; // 10 minutes without progress is considered stalled
+      let manualSyncLastProgressAt = 0;
       let manualSyncRunIdMismatchCount = 0;
       const MANUAL_SYNC_MAX_RUNID_MISMATCH = 6;
       let deckNameState = typeof SAVE_CONFIG.defaultEntryName === 'string' ? SAVE_CONFIG.defaultEntryName : '';
@@ -4696,7 +4697,12 @@ function ptcgdm_render_builder(array $config = []){
             status.runId = raw.run_id;
           }
           if (typeof raw.updated === 'number' && Number.isFinite(raw.updated)) {
-            status.updated = raw.updated;
+            status.updated = raw.updated < 2000000000 ? raw.updated * 1000 : raw.updated;
+          } else if (typeof raw.updated === 'string') {
+            const parsed = parseInt(raw.updated, 10);
+            if (Number.isFinite(parsed)) {
+              status.updated = parsed < 2000000000 ? parsed * 1000 : parsed;
+            }
           }
           if (typeof raw.processedCount === 'number' && Number.isFinite(raw.processedCount)) {
             status.processedCount = raw.processedCount;
@@ -4753,7 +4759,7 @@ function ptcgdm_render_builder(array $config = []){
               status.lastRun.result = lastRunRaw.result.toLowerCase();
             }
             if (typeof lastRunRaw.updated === 'number' && Number.isFinite(lastRunRaw.updated)) {
-              status.lastRun.updated = lastRunRaw.updated;
+              status.lastRun.updated = lastRunRaw.updated < 2000000000 ? lastRunRaw.updated * 1000 : lastRunRaw.updated;
             }
           }
         }
@@ -4762,6 +4768,11 @@ function ptcgdm_render_builder(array $config = []){
 
       function handleManualSyncStatusResult(status){
         const normalized = normalizeManualSyncStatus(status || {});
+        let updatedMs = Date.now();
+        if (typeof normalized.updated === 'number' && Number.isFinite(normalized.updated)) {
+          updatedMs = normalized.updated < 2000000000 ? normalized.updated * 1000 : normalized.updated;
+        }
+        manualSyncLastProgressAt = Math.max(manualSyncLastProgressAt || 0, updatedMs);
         if (normalized.runId && manualSyncRunId && normalized.runId === manualSyncRunId) {
           manualSyncRunIdMismatchCount = 0;
         }
@@ -4839,6 +4850,7 @@ function ptcgdm_render_builder(array $config = []){
           window.clearInterval(manualSyncPollTimer);
         }
         manualSyncPollStartedAt = Date.now();
+        manualSyncLastProgressAt = manualSyncPollStartedAt;
         manualSyncPollTimer = window.setInterval(()=>{
           pollManualSyncStatus();
         }, MANUAL_SYNC_POLL_INTERVAL);
@@ -4853,9 +4865,10 @@ function ptcgdm_render_builder(array $config = []){
           stopManualSyncPolling('Manual sync status is unavailable.', true);
           return;
         }
-        if (manualSyncPollStartedAt && (Date.now() - manualSyncPollStartedAt) > MANUAL_SYNC_MAX_POLL_MS) {
+        const now = Date.now();
+        if (manualSyncLastProgressAt && (now - manualSyncLastProgressAt) > MANUAL_SYNC_STALL_MS) {
           stopManualSyncPolling(
-            'Manual sync is taking too long. This usually means WP-Cron/loopback is blocked and the queued job never started. Check Site Health → Loopback, or server cron for wp-cron.php.',
+            'Manual sync appears stalled (no recent progress updates). Check server logs or debug.log for sync errors.',
             true
           );
           return;
@@ -5687,6 +5700,10 @@ add_action('wp_ajax_ptcgdm_manual_inventory_sync', function(){
     'dataset' => $dataset_key,
     'scope'   => 'scoped',
     'message' => $queued_message,
+    'offset'  => 0,
+    'limit'   => ptcgdm_get_inventory_sync_chunk_limit(),
+    'total'   => 0,
+    'progress'=> 0,
   ]);
 
   $scheduled = ptcgdm_schedule_inventory_sync_job($run_id, $dataset_key, 'scoped');
@@ -7701,6 +7718,17 @@ function ptcgdm_get_inventory_sync_job_ttl() {
   return 7200;
 }
 
+function ptcgdm_get_inventory_sync_chunk_limit() {
+  $default = 100;
+  if (function_exists('apply_filters')) {
+    $filtered = apply_filters('ptcgdm_inventory_sync_chunk_limit', $default);
+    if (is_numeric($filtered)) {
+      $default = max(1, (int) $filtered);
+    }
+  }
+  return $default;
+}
+
 function ptcgdm_normalize_inventory_sync_job_id($job_id) {
   $job_id = is_string($job_id) ? trim($job_id) : '';
   if ($job_id === '') {
@@ -7728,6 +7756,9 @@ function ptcgdm_normalize_inventory_sync_job(array $job = []) {
     'scope'     => ptcgdm_normalize_inventory_sync_scope($job['scope'] ?? 'full'),
     'startedAt' => isset($job['startedAt']) && is_numeric($job['startedAt']) ? (int) $job['startedAt'] : 0,
     'updatedAt' => isset($job['updatedAt']) && is_numeric($job['updatedAt']) ? (int) $job['updatedAt'] : time(),
+    'offset'    => isset($job['offset']) && is_numeric($job['offset']) ? max(0, (int) $job['offset']) : 0,
+    'limit'     => isset($job['limit']) && is_numeric($job['limit']) ? max(1, (int) $job['limit']) : ptcgdm_get_inventory_sync_chunk_limit(),
+    'total'     => isset($job['total']) && is_numeric($job['total']) ? max(0, (int) $job['total']) : 0,
   ];
 
   if ($normalized['status'] === '') {
@@ -7836,6 +7867,33 @@ function ptcgdm_schedule_inventory_sync_job($job_id, $dataset_key = '', $scope =
   }
 
   return (bool) $scheduled;
+}
+
+function ptcgdm_requeue_inventory_sync_job($job_id, $dataset_key = '', $scope = 'full') {
+  $job_id = ptcgdm_normalize_inventory_sync_job_id($job_id);
+  if ($job_id === '') {
+    return false;
+  }
+
+  $dataset_key = ptcgdm_normalize_inventory_dataset_key($dataset_key);
+  $scope = ptcgdm_normalize_inventory_sync_scope($scope);
+
+  if (function_exists('as_enqueue_async_action')) {
+    $scheduled = as_enqueue_async_action('ptcgdm_run_sync_job', [
+      'jobId'   => $job_id,
+      'dataset' => $dataset_key,
+      'scope'   => $scope,
+    ], 'ptcgdm');
+    if ($scheduled) {
+      return true;
+    }
+  }
+
+  if (function_exists('wp_schedule_single_event')) {
+    return (bool) wp_schedule_single_event(time() + 1, 'ptcgdm_run_sync_job', [$job_id, $dataset_key, $scope]);
+  }
+
+  return false;
 }
 
 function ptcgdm_set_inventory_sync_progress(array $progress = [], $dataset_key = '') {
@@ -8123,32 +8181,96 @@ function ptcgdm_run_inventory_sync_job_handler($job_arg = '', $dataset_key = '',
   $dataset_key = ptcgdm_normalize_inventory_dataset_key($dataset_key);
   $scope = ptcgdm_normalize_inventory_sync_scope($scope);
 
+  $job = ptcgdm_get_inventory_sync_job($job_id) ?: [];
+  if (isset($job['status']) && in_array($job['status'], ['done', 'error'], true)) {
+    return;
+  }
+
+  $offset = isset($job['offset']) ? (int) $job['offset'] : 0;
+  $limit  = isset($job['limit']) && (int) $job['limit'] > 0 ? (int) $job['limit'] : ptcgdm_get_inventory_sync_chunk_limit();
+  $total  = isset($job['total']) ? (int) $job['total'] : 0;
+  $started_at = isset($job['startedAt']) && (int) $job['startedAt'] > 0 ? (int) $job['startedAt'] : time();
+
   ptcgdm_set_active_inventory_dataset($dataset_key);
   ptcgdm_set_active_inventory_sync_scope($scope);
 
   ptcgdm_mark_inventory_sync_job_status($job_id, 'running', [
     'dataset'   => $dataset_key,
     'scope'     => $scope,
-    'startedAt' => time(),
+    'startedAt' => $started_at,
+    'offset'    => $offset,
+    'limit'     => $limit,
+    'total'     => $total,
   ]);
 
   $result = ptcgdm_run_inventory_sync_now([
     'dataset' => $dataset_key,
     'scope'   => $scope,
     'run_id'  => $job_id,
+    'offset'  => $offset,
+    'limit'   => $limit,
+    'chunked' => true,
   ]);
 
-  $status = ptcgdm_get_inventory_sync_status($dataset_key);
-  $state = is_wp_error($result) ? 'error' : ((isset($status['state']) && $status['state'] === 'error') ? 'error' : 'done');
-  $message = is_wp_error($result) ? $result->get_error_message() : ($status['message'] ?? '');
-  $result_key = $state === 'error' ? 'error' : 'success';
+  if (is_wp_error($result)) {
+    ptcgdm_mark_inventory_sync_job_status($job_id, 'error', [
+      'dataset' => $dataset_key,
+      'scope'   => $scope,
+      'message' => $result->get_error_message(),
+      'result'  => 'error',
+    ]);
+    return;
+  }
 
-  ptcgdm_mark_inventory_sync_job_status($job_id, $state, [
+  $has_more = false;
+  $processed_total = $offset;
+  $total_count = $total;
+
+  if (is_array($result)) {
+    $has_more = !empty($result['has_more']);
+    if (isset($result['processed_total'])) {
+      $processed_total = (int) $result['processed_total'];
+    } elseif (isset($result['processed'])) {
+      $processed_total = (int) $result['processed'];
+    }
+    if (isset($result['total'])) {
+      $total_count = (int) $result['total'];
+    }
+  } else {
+    $status = ptcgdm_get_inventory_sync_status($dataset_key);
+    if (isset($status['processed_count'])) {
+      $processed_total = (int) $status['processed_count'];
+    }
+    if (isset($status['total_count'])) {
+      $total_count = (int) $status['total_count'];
+    }
+  }
+
+  $progress = $total_count > 0 ? (int) floor(($processed_total / max(1, $total_count)) * 100) : 0;
+
+  $job_update = [
     'dataset' => $dataset_key,
     'scope'   => $scope,
-    'message' => $message,
-    'result'  => $result_key,
-  ]);
+    'offset'  => $processed_total,
+    'limit'   => $limit,
+    'total'   => $total_count,
+    'progress'=> $has_more ? $progress : 100,
+  ];
+
+  if ($has_more) {
+    ptcgdm_mark_inventory_sync_job_status($job_id, 'running', array_merge($job_update, [
+      'message' => __('Inventory sync is running…', 'ptcgdm'),
+      'result'  => '',
+    ]));
+    ptcgdm_requeue_inventory_sync_job($job_id, $dataset_key, $scope);
+    return;
+  }
+
+  ptcgdm_mark_inventory_sync_job_status($job_id, 'done', array_merge($job_update, [
+    'message' => __('Inventory sync completed successfully.', 'ptcgdm'),
+    'result'  => 'success',
+    'status'  => 'done',
+  ]));
 }
 add_action('ptcgdm_run_sync_job', 'ptcgdm_run_inventory_sync_job_handler', 10, 3);
 
@@ -8217,6 +8339,12 @@ function ptcgdm_run_inventory_sync_now($args = []) {
     $run_id = ptcgdm_determine_inventory_sync_run_id($run_id);
     $dataset_key = ptcgdm_resolve_inventory_dataset_key($args);
     $sync_scope = ptcgdm_normalize_inventory_sync_scope(isset($args['scope']) ? $args['scope'] : ptcgdm_get_active_inventory_sync_scope());
+    $chunked = !empty($args['chunked']);
+    $offset = isset($args['offset']) ? max(0, (int) $args['offset']) : 0;
+    $limit = isset($args['limit']) ? (int) $args['limit'] : ptcgdm_get_inventory_sync_chunk_limit();
+    if ($limit < 1) {
+      $limit = ptcgdm_get_inventory_sync_chunk_limit();
+    }
     ptcgdm_set_active_inventory_dataset($dataset_key);
     ptcgdm_set_active_inventory_sync_scope($sync_scope);
     error_log(sprintf('[PTCGDM][Sync] scope=%s dataset=%s', $sync_scope, $dataset_key));
@@ -8282,7 +8410,7 @@ function ptcgdm_run_inventory_sync_now($args = []) {
 
       $raw = trim((string) $raw);
       if ($raw === '') {
-        $sync_summary = ptcgdm_sync_inventory_products([], ['run_id' => $run_id, 'dataset' => $dataset_key, 'scope' => $sync_scope]);
+        $sync_summary = ptcgdm_sync_inventory_products([], ['run_id' => $run_id, 'dataset' => $dataset_key, 'scope' => $sync_scope, 'offset' => $offset, 'limit' => $limit, 'total_count' => 0]);
         $processed = isset($sync_summary['processed']) ? (int) $sync_summary['processed'] : 0;
         $total = isset($sync_summary['total']) ? (int) $sync_summary['total'] : 0;
         ptcgdm_set_inventory_sync_status('success', __('Inventory sync completed successfully.', 'ptcgdm'), ptcgdm_build_inventory_sync_status_extra($run_id, [
@@ -8293,7 +8421,13 @@ function ptcgdm_run_inventory_sync_now($args = []) {
           'current_card_label' => '',
           'dataset' => $dataset_key,
         ]), $dataset_key);
-        return true;
+        return $chunked ? [
+          'processed' => $processed,
+          'processed_total' => $processed,
+          'processed_chunk' => 0,
+          'total' => $total,
+          'has_more' => false,
+        ] : true;
       }
 
       $data = json_decode($raw, true);
@@ -8315,9 +8449,57 @@ function ptcgdm_run_inventory_sync_now($args = []) {
     }
 
     $entries = ptcgdm_filter_inventory_entries_by_dataset($entries, $dataset_key);
+    $prepared_entries = ptcgdm_prepare_inventory_sync_entries($entries);
+    $total_entries = count($prepared_entries);
+
+    if ($total_entries === 0) {
+      ptcgdm_set_inventory_sync_status('success', __('Inventory sync completed successfully.', 'ptcgdm'), ptcgdm_build_inventory_sync_status_extra($run_id, [
+        'result' => 'success',
+        'processed_count' => 0,
+        'total_count' => 0,
+        'card_index' => 0,
+        'current_card_label' => '',
+        'dataset' => $dataset_key,
+      ]), $dataset_key);
+      return $chunked ? [
+        'processed' => 0,
+        'processed_total' => 0,
+        'processed_chunk' => 0,
+        'total' => 0,
+        'has_more' => false,
+      ] : true;
+    }
+
+    if ($chunked && $offset >= $total_entries) {
+      ptcgdm_set_inventory_sync_status('success', __('Inventory sync completed successfully.', 'ptcgdm'), ptcgdm_build_inventory_sync_status_extra($run_id, [
+        'result' => 'success',
+        'processed_count' => $total_entries,
+        'total_count' => $total_entries,
+        'card_index' => $total_entries,
+        'current_card_label' => '',
+        'dataset' => $dataset_key,
+      ]), $dataset_key);
+      return [
+        'processed' => $total_entries,
+        'processed_total' => $total_entries,
+        'processed_chunk' => 0,
+        'total' => $total_entries,
+        'has_more' => false,
+      ];
+    }
+
+    $slice = $chunked ? array_slice($prepared_entries, $offset, $limit > 0 ? $limit : null) : $prepared_entries;
 
     try {
-      $sync_summary = ptcgdm_sync_inventory_products($entries, ['run_id' => $run_id, 'dataset' => $dataset_key, 'scope' => $sync_scope]);
+      $sync_summary = ptcgdm_sync_inventory_products($slice, [
+        'run_id' => $run_id,
+        'dataset' => $dataset_key,
+        'scope' => $sync_scope,
+        'offset' => $chunked ? $offset : 0,
+        'limit' => $chunked ? $limit : 0,
+        'total_count' => $total_entries,
+        'prepared_entries' => $slice,
+      ]);
     } catch (Throwable $sync_error) {
       if (defined('WP_DEBUG') && WP_DEBUG) {
         error_log('PTCGDM inventory sync failed: ' . $sync_error->getMessage());
@@ -8344,16 +8526,47 @@ function ptcgdm_run_inventory_sync_now($args = []) {
       return new WP_Error('ptcgdm_sync_exception', $message);
     }
 
-    $processed = isset($sync_summary['processed']) ? (int) $sync_summary['processed'] : 0;
-    $total = isset($sync_summary['total']) ? (int) $sync_summary['total'] : 0;
+    $processed_total = $chunked ? max($offset, isset($sync_summary['processed']) ? (int) $sync_summary['processed'] : ($offset + count($slice))) : (int) ($sync_summary['processed'] ?? 0);
+    $processed_chunk = isset($sync_summary['processed_chunk']) ? (int) $sync_summary['processed_chunk'] : max(0, $processed_total - $offset);
+    $total = isset($sync_summary['total']) ? (int) $sync_summary['total'] : $total_entries;
+
+    if ($chunked && $processed_total < $total) {
+      ptcgdm_set_inventory_sync_status('running', __('Inventory sync is running…', 'ptcgdm'), ptcgdm_build_inventory_sync_status_extra($run_id, [
+        'result' => '',
+        'processed_count' => $processed_total,
+        'total_count' => $total,
+        'card_index' => $processed_total,
+        'current_card_label' => '',
+        'dataset' => $dataset_key,
+      ]), $dataset_key);
+
+      return [
+        'processed' => $processed_total,
+        'processed_total' => $processed_total,
+        'processed_chunk' => $processed_chunk,
+        'total' => $total,
+        'has_more' => true,
+      ];
+    }
+
     ptcgdm_set_inventory_sync_status('success', __('Inventory sync completed successfully.', 'ptcgdm'), ptcgdm_build_inventory_sync_status_extra($run_id, [
       'result' => 'success',
-      'processed_count' => $processed,
+      'processed_count' => $processed_total,
       'total_count' => $total,
-      'card_index' => $processed,
+      'card_index' => $processed_total,
       'current_card_label' => '',
       'dataset' => $dataset_key,
     ]), $dataset_key);
+
+    if ($chunked) {
+      return [
+        'processed' => $processed_total,
+        'processed_total' => $processed_total,
+        'processed_chunk' => $processed_chunk,
+        'total' => $total,
+        'has_more' => false,
+      ];
+    }
 
     return true;
   } catch (Throwable $e) {
@@ -9204,6 +9417,10 @@ function ptcgdm_sync_inventory_products(array $entries, array $context = []) {
   $progress_step = isset($context['progress_step']) ? (int) $context['progress_step'] : 5;
   $dataset_key = ptcgdm_resolve_inventory_dataset_key($context);
   $sync_scope = ptcgdm_normalize_inventory_sync_scope(isset($context['scope']) ? $context['scope'] : 'full');
+  $prepared_entries_override = isset($context['prepared_entries']) && is_array($context['prepared_entries']) ? array_values($context['prepared_entries']) : null;
+  $start_offset = isset($context['offset']) ? max(0, (int) $context['offset']) : 0;
+  $chunk_limit = isset($context['limit']) ? (int) $context['limit'] : 0;
+  $total_count_override = isset($context['total_count']) ? (int) $context['total_count'] : 0;
   if (function_exists('apply_filters')) {
     $progress_step = (int) apply_filters('ptcgdm_inventory_sync_progress_step', $progress_step, $context);
   }
@@ -9211,15 +9428,22 @@ function ptcgdm_sync_inventory_products(array $entries, array $context = []) {
     $progress_step = 5;
   }
 
-  $prepared_entries = ptcgdm_prepare_inventory_sync_entries($entries);
-  $total_count = count($prepared_entries);
+  if (is_array($prepared_entries_override)) {
+    $prepared_entries = $prepared_entries_override;
+  } else {
+    $prepared_entries = ptcgdm_prepare_inventory_sync_entries($entries);
+  }
+  if ($start_offset > 0 || $chunk_limit > 0) {
+    $prepared_entries = array_slice($prepared_entries, $start_offset, $chunk_limit > 0 ? $chunk_limit : null);
+  }
+  $total_count = $total_count_override > 0 ? max($total_count_override, $start_offset + count($prepared_entries)) : count($prepared_entries);
   $summary['total'] = $total_count;
 
   ptcgdm_set_inventory_sync_progress([
     'run_id' => $run_id,
-    'processed_count' => 0,
+    'processed_count' => $start_offset,
     'total_count' => $total_count,
-    'card_index' => 0,
+    'card_index' => $start_offset,
     'current_card_label' => '',
     'dataset' => $dataset_key,
   ], $dataset_key);
@@ -9227,7 +9451,7 @@ function ptcgdm_sync_inventory_products(array $entries, array $context = []) {
   $previous_sync_state = ptcgdm_is_inventory_syncing();
   ptcgdm_set_inventory_syncing(true);
 
-  $processed_count = 0;
+  $processed_count = $start_offset;
   $skipped_other_game_products = 0;
 
   try {
@@ -9483,10 +9707,11 @@ function ptcgdm_sync_inventory_products(array $entries, array $context = []) {
       $synced_skus[$sku] = true;
     }
 
-    if ($sync_scope === 'full') {
+    $has_more = ($start_offset + count($prepared_entries)) < $total_count;
+    if ($sync_scope === 'full' && !$has_more) {
       ptcgdm_zero_unlisted_inventory_products($synced_skus, $dataset_key);
     }
-  } finally { 
+  } finally {
     ptcgdm_set_inventory_syncing($previous_sync_state);
   }
 
@@ -9495,6 +9720,8 @@ function ptcgdm_sync_inventory_products(array $entries, array $context = []) {
   }
 
   $summary['processed'] = $processed_count;
+  $summary['processed_chunk'] = max(0, $processed_count - $start_offset);
+  $summary['has_more'] = ($start_offset + $summary['processed_chunk']) < $total_count;
 
   return $summary;
 }
