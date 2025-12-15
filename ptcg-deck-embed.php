@@ -1354,6 +1354,10 @@ function ptcgdm_render_builder(array $config = []){
       let manualSyncRunId = '';
       let manualSyncPollTimer = 0;
       const MANUAL_SYNC_POLL_INTERVAL = Math.max(3000, Number(SAVE_CONFIG.manualSyncPollInterval) || 5000);
+      const MANUAL_SYNC_MAX_POLL_MS = 3 * 60 * 1000; // 3 minutes
+      let manualSyncPollStartedAt = 0;
+      let manualSyncRunIdMismatchCount = 0;
+      const MANUAL_SYNC_MAX_RUNID_MISMATCH = 6;
       let deckNameState = typeof SAVE_CONFIG.defaultEntryName === 'string' ? SAVE_CONFIG.defaultEntryName : '';
       let deckFormatState = typeof SAVE_CONFIG.defaultFormat === 'string' ? SAVE_CONFIG.defaultFormat : '';
 
@@ -4664,6 +4668,7 @@ function ptcgdm_render_builder(array $config = []){
         if (manualSyncPollTimer) {
           window.clearInterval(manualSyncPollTimer);
         }
+        manualSyncPollStartedAt = Date.now();
         manualSyncPollTimer = window.setInterval(()=>{
           pollManualSyncStatus();
         }, MANUAL_SYNC_POLL_INTERVAL);
@@ -4675,6 +4680,13 @@ function ptcgdm_render_builder(array $config = []){
         const nonce = SAVE_CONFIG.manualSyncStatusNonce || '';
         if (!action || !nonce) {
           stopManualSyncPolling('Manual sync status is unavailable.', true);
+          return;
+        }
+        if (manualSyncPollStartedAt && (Date.now() - manualSyncPollStartedAt) > MANUAL_SYNC_MAX_POLL_MS) {
+          stopManualSyncPolling(
+            'Manual sync is taking too long. This usually means WP-Cron/loopback is blocked and the queued job never started. Check Site Health → Loopback, or server cron for wp-cron.php.',
+            true
+          );
           return;
         }
         const body = new FormData();
@@ -4693,6 +4705,9 @@ function ptcgdm_render_builder(array $config = []){
             throw new Error(rawError || fallback);
           }
           const status = normalizeManualSyncStatus(result?.data?.status || {});
+          if (status.runId && manualSyncRunId && status.runId === manualSyncRunId) {
+            manualSyncRunIdMismatchCount = 0;
+          }
           if (status.runId && manualSyncRunId && status.runId !== manualSyncRunId) {
             const lastRun = status.lastRun || {};
             if (lastRun.runId && lastRun.runId === manualSyncRunId) {
@@ -4703,12 +4718,21 @@ function ptcgdm_render_builder(array $config = []){
               } else {
                 stopManualSyncPolling(lastRun.message || 'Inventory sync finished.', false);
               }
+              manualSyncRunIdMismatchCount = 0;
               return;
+            }
+            manualSyncRunIdMismatchCount += 1;
+            if (manualSyncRunIdMismatchCount >= MANUAL_SYNC_MAX_RUNID_MISMATCH) {
+              stopManualSyncPolling(
+                'Manual sync status runId kept changing. A new sync may be starting repeatedly or status storage is unstable. Check server logs/debug.log for sync errors.',
+                true
+              );
             }
             return;
           }
           if (!manualSyncRunId && status.runId) {
             manualSyncRunId = status.runId;
+            manualSyncRunIdMismatchCount = 0;
           }
           if (!status.runId || !manualSyncRunId || status.runId === manualSyncRunId) {
             renderManualSyncProgress(status);
@@ -7566,10 +7590,19 @@ function ptcgdm_queue_inventory_sync($dataset_key = '') {
   error_log('[PTCGDM][Queue] spawn_triggered=' . ($spawn_triggered ? 'yes' : 'no'));
   error_log('[PTCGDM][Queue] already_syncing=' . (ptcgdm_is_inventory_syncing() ? 'yes' : 'no'));
 
-  if ($event_scheduled || $spawn_triggered || ptcgdm_is_inventory_syncing()) {
+  // If a sync is already running, treat as queued so the UI can keep polling.
+  if (ptcgdm_is_inventory_syncing()) {
     return true;
   }
 
+  // Only treat as queued if we actually spawned WP-Cron right now.
+  // Scheduling an event alone is NOT enough on hosts where WP-Cron/loopback doesn't run.
+  if ($spawn_triggered) {
+    return true;
+  }
+
+  // If we only scheduled (or saw an existing schedule) but couldn't spawn,
+  // return false so ptcgdm_trigger_inventory_sync() will fall back to async launch.
   return false;
 }
 
