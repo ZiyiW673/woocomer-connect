@@ -4739,6 +4739,53 @@ function ptcgdm_render_builder(array $config = []){
         }
       }
 
+      function buildManualSyncSnapshotFromSaved(){
+        if (!IS_INVENTORY) return '';
+        if (!inventorySavedMap || inventorySavedMap.size === 0) return '';
+        const cards = [];
+        inventorySavedMap.forEach((entry)=>{
+          if (!entry || !entry.id) return;
+          const record = { id: entry.id, variants: {} };
+          if (entry.variants && typeof entry.variants === 'object') {
+            Object.keys(entry.variants).forEach((variantKey)=>{
+              const variant = entry.variants[variantKey];
+              if (!variant || typeof variant !== 'object') return;
+              const next = {};
+              if (Number.isFinite(variant.qty)) next.qty = variant.qty;
+              if (Number.isFinite(variant.price)) next.price = variant.price;
+              if (variant.slots && Array.isArray(variant.slots)) {
+                next.slots = variant.slots.map((slot)=>{
+                  const slotOut = {};
+                  if (slot && typeof slot === 'object') {
+                    if (slot.name) slotOut.name = slot.name;
+                    if (Number.isFinite(slot.qty)) slotOut.qty = slot.qty;
+                    if (Number.isFinite(slot.price)) slotOut.price = slot.price;
+                    if (slot.active) slotOut.active = true;
+                  }
+                  return slotOut;
+                }).filter((slot)=>Object.keys(slot).length > 0);
+              }
+              if (Object.keys(next).length > 0) {
+                record.variants[variantKey] = next;
+              }
+            });
+          }
+          if (Object.keys(record.variants).length === 0) return;
+          cards.push(record);
+        });
+        if (!cards.length) return '';
+        const payload = {
+          name: getDeckNameValue() || (SAVE_CONFIG.defaultEntryName || 'Untitled Deck'),
+          format: getDeckFormatValue() || (SAVE_CONFIG.defaultFormat || 'Standard'),
+          cards,
+        };
+        try {
+          return JSON.stringify(payload, null, 2);
+        } catch (err) {
+          return '';
+        }
+      }
+
       async function triggerManualInventorySync(){
         if (!IS_INVENTORY || isManualSyncing) {
           return;
@@ -4770,9 +4817,13 @@ function ptcgdm_render_builder(array $config = []){
           payload.append('action', action);
           payload.append('nonce', nonce);
           payload.append('datasetKey', DATASET_KEY);
-          updateJSON();
-          if (typeof deckJsonCache === 'string' && deckJsonCache.trim()) {
-            payload.append('content', deckJsonCache);
+          const entries = updateJSON();
+          let snapshot = (typeof deckJsonCache === 'string' && deckJsonCache.trim()) ? deckJsonCache : '';
+          if ((!snapshot || snapshot.trim() === '') && Array.isArray(entries) && !entries.length && IS_INVENTORY) {
+            snapshot = buildManualSyncSnapshotFromSaved();
+          }
+          if (snapshot && snapshot.trim()) {
+            payload.append('content', snapshot);
           }
           const response = await fetch(AJAX_URL, { method: 'POST', body: payload });
           const result = await safeParseJsonResponse(response);
@@ -5063,6 +5114,10 @@ function ptcgdm_render_builder(array $config = []){
           }
         } else if (typeof data === 'string') {
           message = data;
+        }
+        const formatted = formatResponseText(message);
+        if (formatted) {
+          message = formatted;
         }
         message = (message || '').trim();
         if (!message) {
