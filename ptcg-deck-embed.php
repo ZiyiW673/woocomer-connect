@@ -2197,6 +2197,19 @@ function ptcgdm_render_builder(array $config = []){
                   c.set.name = label;
                 }
               }
+
+              const normalizedSetId = String(c?.set?.id || canonicalId || '').trim().toLowerCase();
+              const isPromoCard = DATASET_KEY === 'one_piece' && normalizedSetId === 'promotions';
+              const existing = byId.get(c.id);
+
+              // When IDs overlap across sets, prefer non-promotion entries.
+              if(isPromoCard && existing){
+                const existingSet = String(existing?.set?.id || '').trim().toLowerCase();
+                if(existingSet && existingSet !== 'promotions'){
+                  continue;
+                }
+              }
+
               applyDatasetSpecificCardAdjustments(c);
               registerCardNumberIndex(canonicalId, c);
               registerCardNameIndex(canonicalId, c);
