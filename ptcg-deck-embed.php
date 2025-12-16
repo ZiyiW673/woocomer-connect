@@ -2998,22 +2998,44 @@ function ptcgdm_render_builder(array $config = []){
         if(!raw) return '';
         const upper = raw.toUpperCase();
         const variants = [upper, upper.replace(/\s+/g,''), upper.replace(/-/g,'')];
+        const isBlockedSet = (setId) => {
+          if(!setId) return false;
+          if(DATASET_KEY !== 'one_piece') return false;
+          return String(setId).trim().toLowerCase() === 'promotions';
+        };
         for(const variant of variants){
           if(!variant) continue;
-          if(setCodeLookup.has(variant)) return setCodeLookup.get(variant);
+          if(setCodeLookup.has(variant)){
+            const matched = setCodeLookup.get(variant);
+            if(isBlockedSet(matched)) continue;
+            return matched;
+          }
         }
         const lower = raw.toLowerCase();
-        if(ALLOWED_SET_IDS.has(lower)) return lower;
+        if(ALLOWED_SET_IDS.has(lower)){
+          if(isBlockedSet(lower)) return '';
+          return lower;
+        }
         for(const variant of variants){
           const lowerVariant = variant.toLowerCase();
-          if(ALLOWED_SET_IDS.has(lowerVariant)) return lowerVariant;
+          if(ALLOWED_SET_IDS.has(lowerVariant)){
+            if(isBlockedSet(lowerVariant)) continue;
+            return lowerVariant;
+          }
           const upperVariant = lowerVariant.toUpperCase();
-          if(setCodeLookup.has(upperVariant)) return setCodeLookup.get(upperVariant);
+          if(setCodeLookup.has(upperVariant)){
+            const mapped = setCodeLookup.get(upperVariant);
+            if(isBlockedSet(mapped)) continue;
+            return mapped;
+          }
         }
         return '';
       }
 
       function findCardIdBySetAndNumber(setId, number){
+        if(DATASET_KEY === 'one_piece' && String(setId || '').trim().toLowerCase() === 'promotions'){
+          return '';
+        }
         const keyBase = makeSetKey(setId);
         if(!keyBase) return '';
         const variants = new Set(normaliseNumberVariants(number));
