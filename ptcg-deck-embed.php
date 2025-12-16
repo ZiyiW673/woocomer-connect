@@ -1556,26 +1556,27 @@ function ptcgdm_render_builder(array $config = []){
         els.inventoryBulkDelete.dataset.defaultLabel = els.inventoryBulkDelete.textContent || '';
       }
 
-      let isSavingDeck = false;
-      let isManualSyncing = false;
-      let manualSyncRunId = '';
-      let manualSyncPollTimer = 0;
-      const MANUAL_SYNC_POLL_INTERVAL = Math.max(3000, Number(SAVE_CONFIG.manualSyncPollInterval) || 5000);
-      const MANUAL_SYNC_STATUS_URL = (typeof SAVE_CONFIG.manualSyncStatusRest === 'string' && SAVE_CONFIG.manualSyncStatusRest)
-        ? SAVE_CONFIG.manualSyncStatusRest
-        : `${API_BASE}/sync-status`;
-      let manualSyncPollStartedAt = 0;
-      const MANUAL_SYNC_STALL_MS = 10 * 60 * 1000; // 10 minutes without progress is considered stalled
-      let manualSyncLastProgressAt = 0;
-      const MANUAL_SYNC_SLICE_ACTION = SAVE_CONFIG.manualSyncSliceAction || '';
-      const MANUAL_SYNC_SLICE_NONCE = SAVE_CONFIG.manualSyncSliceNonce || '';
-      const MANUAL_SYNC_SLICE_INTERVAL = 2500;
-      let manualSyncLastSliceAt = 0;
-      let manualSyncRunIdMismatchCount = 0;
-      const MANUAL_SYNC_MAX_RUNID_MISMATCH = 6;
-      let manualSyncLastState = '';
-      let deckNameState = typeof SAVE_CONFIG.defaultEntryName === 'string' ? SAVE_CONFIG.defaultEntryName : '';
-      let deckFormatState = typeof SAVE_CONFIG.defaultFormat === 'string' ? SAVE_CONFIG.defaultFormat : '';
+        let isSavingDeck = false;
+        let isManualSyncing = false;
+        let manualSyncRunId = '';
+        let manualSyncPollTimer = 0;
+        const MANUAL_SYNC_POLL_INTERVAL = Math.max(3000, Number(SAVE_CONFIG.manualSyncPollInterval) || 5000);
+        const MANUAL_SYNC_STATUS_URL = (typeof SAVE_CONFIG.manualSyncStatusRest === 'string' && SAVE_CONFIG.manualSyncStatusRest)
+          ? SAVE_CONFIG.manualSyncStatusRest
+          : `${API_BASE}/sync-status`;
+        let manualSyncPollStartedAt = 0;
+        const MANUAL_SYNC_STALL_MS = 10 * 60 * 1000; // 10 minutes without progress is considered stalled
+        let manualSyncLastProgressAt = 0;
+        const MANUAL_SYNC_SLICE_ACTION = SAVE_CONFIG.manualSyncSliceAction || '';
+        const MANUAL_SYNC_SLICE_NONCE = SAVE_CONFIG.manualSyncSliceNonce || '';
+        const MANUAL_SYNC_SLICE_INTERVAL = 2500;
+        let manualSyncLastSliceAt = 0;
+        let manualSyncRunIdMismatchCount = 0;
+        const MANUAL_SYNC_MAX_RUNID_MISMATCH = 6;
+        let manualSyncLastState = '';
+        let manualSyncStopNotified = false;
+        let deckNameState = typeof SAVE_CONFIG.defaultEntryName === 'string' ? SAVE_CONFIG.defaultEntryName : '';
+        let deckFormatState = typeof SAVE_CONFIG.defaultFormat === 'string' ? SAVE_CONFIG.defaultFormat : '';
 
       function setDeckError(message){
         deckErrorMessage = message ? String(message) : '';
@@ -4691,18 +4692,19 @@ function ptcgdm_render_builder(array $config = []){
           updateDeckButtons();
           return;
         }
-        const action = SAVE_CONFIG.manualSyncAction || '';
-        const nonce = SAVE_CONFIG.manualSyncNonce || '';
-        if (!action || !nonce) {
-          alert('Manual sync is unavailable in this view.');
-          return;
-        }
-        isManualSyncing = true;
-        manualSyncRunId = '';
-        setSyncProgressVisible(true);
-        renderManualSyncProgress({ state: 'running', message: 'Preparing inventory sync…' });
-        const button = els.btnSyncInventory || null;
-        const defaultLabel = button ? (button.dataset.defaultLabel || button.textContent || '') : '';
+          const action = SAVE_CONFIG.manualSyncAction || '';
+          const nonce = SAVE_CONFIG.manualSyncNonce || '';
+          if (!action || !nonce) {
+            alert('Manual sync is unavailable in this view.');
+            return;
+          }
+          isManualSyncing = true;
+          manualSyncRunId = '';
+          manualSyncStopNotified = false;
+          setSyncProgressVisible(true);
+          renderManualSyncProgress({ state: 'running', message: 'Preparing inventory sync…' });
+          const button = els.btnSyncInventory || null;
+          const defaultLabel = button ? (button.dataset.defaultLabel || button.textContent || '') : '';
         if (button) {
           button.disabled = true;
           button.textContent = button.dataset.syncingLabel || 'Syncing…';
@@ -5144,19 +5146,24 @@ function ptcgdm_render_builder(array $config = []){
         }
       }
 
-      function stopManualSyncPolling(message, isError){
-        if (manualSyncPollTimer) {
-          window.clearInterval(manualSyncPollTimer);
-          manualSyncPollTimer = 0;
+        function stopManualSyncPolling(message, isError){
+          if (manualSyncPollTimer) {
+            window.clearInterval(manualSyncPollTimer);
+            manualSyncPollTimer = 0;
+          }
+          manualSyncRunId = '';
+          manualSyncLastState = '';
+          manualSyncLastSliceAt = 0;
+          const alreadyNotified = manualSyncStopNotified;
+          manualSyncStopNotified = true;
+          finishManualSyncUI();
+          if (alreadyNotified) {
+            return;
+          }
+          if (message) {
+            alert(isError ? `Sync failed: ${message}` : message);
+          }
         }
-        manualSyncRunId = '';
-        manualSyncLastState = '';
-        manualSyncLastSliceAt = 0;
-        finishManualSyncUI();
-        if (message) {
-          alert(isError ? `Sync failed: ${message}` : message);
-        }
-      }
 
       function ensureSavedDeckOption(url, filename, deckName){
         if (!url || !els.savedDeckSelect) return;
