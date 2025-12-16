@@ -294,6 +294,54 @@ function ptcgdm_detect_dataset_from_card_id($card_id) {
   return '';
 }
 
+function ptcgdm_resolve_inventory_product_for_dataset($card_id, $dataset_key = '') {
+  $dataset_key = ptcgdm_normalize_inventory_dataset_key($dataset_key);
+  $base_sku = trim((string) $card_id);
+  $slug = ptcgdm_slugify_inventory_dataset_key($dataset_key);
+  $dataset_sku = $slug !== '' ? $slug . '-' . $base_sku : $base_sku;
+
+  if (!function_exists('wc_get_product_id_by_sku') || !function_exists('wc_get_product')) {
+    return [
+      'sku' => $base_sku,
+      'product_id' => 0,
+      'product' => null,
+    ];
+  }
+
+  $base_product_id = $base_sku !== '' ? (int) wc_get_product_id_by_sku($base_sku) : 0;
+  if ($base_product_id > 0) {
+    $base_product = wc_get_product($base_product_id);
+    $assigned_dataset = '';
+    if ($base_product instanceof WC_Product && method_exists($base_product, 'get_meta')) {
+      $assigned_dataset = ptcgdm_normalize_inventory_dataset_key($base_product->get_meta('_ptcgdm_dataset', true));
+    }
+
+    if ($assigned_dataset === '' || $assigned_dataset === $dataset_key) {
+      return [
+        'sku' => $base_sku,
+        'product_id' => $base_product_id,
+        'product' => $base_product instanceof WC_Product ? $base_product : null,
+      ];
+    }
+  }
+
+  $dataset_product_id = $dataset_sku !== '' ? (int) wc_get_product_id_by_sku($dataset_sku) : 0;
+  if ($dataset_product_id > 0) {
+    $dataset_product = wc_get_product($dataset_product_id);
+    return [
+      'sku' => $dataset_sku,
+      'product_id' => $dataset_product_id,
+      'product' => $dataset_product instanceof WC_Product ? $dataset_product : null,
+    ];
+  }
+
+  return [
+    'sku' => $dataset_sku !== '' ? $dataset_sku : $base_sku,
+    'product_id' => 0,
+    'product' => null,
+  ];
+}
+
 function ptcgdm_detect_dataset_from_entries($payload) {
   if (is_string($payload)) {
     $decoded = json_decode($payload, true);
@@ -9799,30 +9847,41 @@ function ptcgdm_sync_inventory_products(array $entries, array $context = []) {
         $image_url = $card_preview['image'];
       }
 
-      $sku = $card_id;
-      $product_id = wc_get_product_id_by_sku($sku);
-      $product = null;
+      $resolved_product = ptcgdm_resolve_inventory_product_for_dataset($card_id, $dataset_key);
+      $sku = $resolved_product['sku'];
+      $product_id = (int) ($resolved_product['product_id'] ?? 0);
+      $product = $resolved_product['product'] ?? null;
 
-      if ($product_id) {
+      if ($product_id && (!$product instanceof WC_Product)) {
         $product = wc_get_product($product_id);
-        if ($product instanceof WC_Product) {
-          $product_game = ptcgdm_get_product_game_slug($product_id, $product);
-          if ($sync_scope === 'scoped' && $product_game !== '' && $product_game !== $dataset_key) {
-            $skipped_other_game_products++;
-            continue;
-          }
+      }
 
-          $current_type = method_exists($product, 'get_type') ? $product->get_type() : '';
-          if ($requires_variable && $current_type !== 'variable') {
-            $class_name = class_exists('WC_Product_Factory') ? WC_Product_Factory::get_product_classname($product_id, 'variable') : '';
-            if ($class_name && class_exists($class_name)) {
-              $product = new $class_name($product_id);
-            } else {
-              $product = new WC_Product_Variable($product_id);
-            }
-            if (method_exists($product, 'set_type')) {
-              $product->set_type('variable');
-            }
+      if (!($product instanceof WC_Product)) {
+        $product = null;
+        $product_id = 0;
+      }
+
+      if ($sku === '') {
+        continue;
+      }
+
+      if ($product instanceof WC_Product) {
+        $product_game = ptcgdm_get_product_game_slug($product_id, $product);
+        if ($sync_scope === 'scoped' && $product_game !== '' && $product_game !== $dataset_key) {
+          $skipped_other_game_products++;
+          continue;
+        }
+
+        $current_type = method_exists($product, 'get_type') ? $product->get_type() : '';
+        if ($requires_variable && $current_type !== 'variable') {
+          $class_name = class_exists('WC_Product_Factory') ? WC_Product_Factory::get_product_classname($product_id, 'variable') : '';
+          if ($class_name && class_exists($class_name)) {
+            $product = new $class_name($product_id);
+          } else {
+            $product = new WC_Product_Variable($product_id);
+          }
+          if (method_exists($product, 'set_type')) {
+            $product->set_type('variable');
           }
         }
       }
