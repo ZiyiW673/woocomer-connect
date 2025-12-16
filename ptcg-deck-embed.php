@@ -294,9 +294,54 @@ function ptcgdm_detect_dataset_from_card_id($card_id) {
   return '';
 }
 
+function ptcgdm_normalize_inventory_sku($sku) {
+  $normalized = trim((string) $sku);
+  if ($normalized === '') {
+    return '';
+  }
+
+  // Remove characters WooCommerce is likely to reject and collapse whitespace.
+  $normalized = preg_replace('/\s+/', '-', $normalized);
+  $normalized = preg_replace('/[^A-Za-z0-9\-_.]+/', '-', $normalized);
+  $normalized = trim((string) $normalized, '-_.');
+
+  return $normalized;
+}
+
+function ptcgdm_generate_unique_dataset_sku($candidate_sku, $dataset_key = '') {
+  $base = ptcgdm_normalize_inventory_sku($candidate_sku);
+  if ($base === '') {
+    return '';
+  }
+
+  if (!function_exists('wc_product_has_unique_sku')) {
+    return $base;
+  }
+
+  $slug = ptcgdm_slugify_inventory_dataset_key($dataset_key);
+  $base_candidate = $base;
+  if ($slug !== '' && strpos($base, $slug . '-') !== 0) {
+    $base_candidate = $slug . '-' . $base;
+  }
+
+  $sku = $base_candidate;
+  $suffix = 2;
+  while (!wc_product_has_unique_sku(0, $sku) && $suffix < 10) {
+    $sku = $base_candidate . '-' . $suffix;
+    $suffix++;
+  }
+
+  // Final check; if still not unique, fall back to the normalized base.
+  if (!wc_product_has_unique_sku(0, $sku)) {
+    return $base;
+  }
+
+  return $sku;
+}
+
 function ptcgdm_resolve_inventory_product_for_dataset($card_id, $dataset_key = '') {
   $dataset_key = ptcgdm_normalize_inventory_dataset_key($dataset_key);
-  $base_sku = trim((string) $card_id);
+  $base_sku = ptcgdm_normalize_inventory_sku($card_id);
   $slug = ptcgdm_slugify_inventory_dataset_key($dataset_key);
   $dataset_sku = $slug !== '' ? $slug . '-' . $base_sku : $base_sku;
 
@@ -316,6 +361,12 @@ function ptcgdm_resolve_inventory_product_for_dataset($card_id, $dataset_key = '
       $assigned_dataset = ptcgdm_normalize_inventory_dataset_key($base_product->get_meta('_ptcgdm_dataset', true));
     }
 
+    $product_game = ptcgdm_get_product_game_slug($base_product_id, $base_product);
+
+    if ($assigned_dataset === '' && $product_game !== '') {
+      $assigned_dataset = $product_game;
+    }
+
     if ($assigned_dataset === '' || $assigned_dataset === $dataset_key) {
       return [
         'sku' => $base_sku,
@@ -328,6 +379,17 @@ function ptcgdm_resolve_inventory_product_for_dataset($card_id, $dataset_key = '
   $dataset_product_id = $dataset_sku !== '' ? (int) wc_get_product_id_by_sku($dataset_sku) : 0;
   if ($dataset_product_id > 0) {
     $dataset_product = wc_get_product($dataset_product_id);
+    $product_game = ptcgdm_get_product_game_slug($dataset_product_id, $dataset_product);
+    if ($product_game !== '' && $product_game !== $dataset_key) {
+      // SKU belongs to another dataset; generate a unique alternative to avoid duplication.
+      $alt_sku = ptcgdm_generate_unique_dataset_sku($dataset_sku, $dataset_key);
+      return [
+        'sku' => $alt_sku,
+        'product_id' => 0,
+        'product' => null,
+      ];
+    }
+
     return [
       'sku' => $dataset_sku,
       'product_id' => $dataset_product_id,
@@ -335,11 +397,58 @@ function ptcgdm_resolve_inventory_product_for_dataset($card_id, $dataset_key = '
     ];
   }
 
+  $unique_sku = $dataset_sku !== '' ? $dataset_sku : $base_sku;
+  if (function_exists('wc_product_has_unique_sku') && !wc_product_has_unique_sku(0, $unique_sku)) {
+    $unique_sku = ptcgdm_generate_unique_dataset_sku($unique_sku, $dataset_key);
+  }
+
   return [
-    'sku' => $dataset_sku !== '' ? $dataset_sku : $base_sku,
+    'sku' => $unique_sku,
     'product_id' => 0,
     'product' => null,
   ];
+}
+
+function ptcgdm_safe_set_product_sku($product, $sku, $dataset_key = '') {
+  if (!($product instanceof WC_Product)) {
+    return '';
+  }
+
+  $candidates = [];
+  $normalized = ptcgdm_normalize_inventory_sku($sku);
+  if ($normalized !== '') {
+    $candidates[] = $normalized;
+  }
+
+  $slug = ptcgdm_slugify_inventory_dataset_key($dataset_key);
+  if ($normalized !== '' && $slug !== '' && strpos($normalized, $slug . '-') !== 0) {
+    $candidates[] = $slug . '-' . $normalized;
+  }
+
+  $candidates = array_values(array_unique(array_filter($candidates)));
+  if (empty($candidates)) {
+    return '';
+  }
+
+  foreach ($candidates as $candidate) {
+    try {
+      if (function_exists('wc_product_has_unique_sku')) {
+        if (!wc_product_has_unique_sku($product->get_id(), $candidate)) {
+          continue;
+        }
+      }
+
+      if (method_exists($product, 'set_sku')) {
+        $product->set_sku($candidate);
+      }
+
+      return $candidate;
+    } catch (Exception $e) {
+      continue;
+    }
+  }
+
+  return '';
 }
 
 function ptcgdm_detect_dataset_from_entries($payload) {
@@ -9437,7 +9546,13 @@ function ptcgdm_sync_inventory_product_variations($product, array $active_varian
     if ($sku_suffix === '') {
       $sku_suffix = strtoupper(substr((string) $variant_key, 0, 6));
     }
-    $variation->set_sku($sku . '-' . $sku_suffix);
+
+    $variant_sku = $sku . '-' . $sku_suffix;
+    $applied_sku = ptcgdm_safe_set_product_sku($variation, $variant_sku, $dataset_key);
+    if ($applied_sku === '') {
+      continue;
+    }
+
     $variation->save();
     $used_ids[] = $variation->get_id();
   }
@@ -9884,13 +9999,23 @@ function ptcgdm_sync_inventory_products(array $entries, array $context = []) {
             $product->set_type('variable');
           }
         }
+
+        if (method_exists($product, 'get_sku') && $product->get_sku() === '') {
+          $applied = ptcgdm_safe_set_product_sku($product, $sku, $dataset_key);
+          if ($applied === '') {
+            continue;
+          }
+          $sku = $applied;
+        }
       }
 
       if (!$product instanceof WC_Product) {
         $product = new WC_Product_Variable();
-        if (method_exists($product, 'set_sku')) {
-          $product->set_sku($sku);
+        $applied = ptcgdm_safe_set_product_sku($product, $sku, $dataset_key);
+        if ($applied === '') {
+          continue;
         }
+        $sku = $applied;
         if (method_exists($product, 'set_status')) {
           $product->set_status('publish');
         }
