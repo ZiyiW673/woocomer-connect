@@ -2553,11 +2553,21 @@ function ptcgdm_render_builder(array $config = []){
       }
 
       function getCardSetLabel(card){
-        const name = (card?.set?.name || '').trim();
-        if(name) return name;
+        const rawName = (card?.set?.name || '').trim();
         const setId = String(card?.set?.id || '').trim().toLowerCase();
-        if(setId && SET_LABELS[setId]){
-          return SET_LABELS[setId];
+        const mappedLabel = setId && SET_LABELS[setId] ? SET_LABELS[setId] : '';
+        if(mappedLabel){
+          const normalizedRaw = rawName.replace(/\s+/g,'').replace(/[^A-Za-z0-9]/g,'').toUpperCase();
+          const normalizedId = setId.replace(/\s+/g,'').replace(/[^A-Za-z0-9]/g,'').toUpperCase();
+          if(!rawName || normalizedRaw === normalizedId){
+            return mappedLabel;
+          }
+        }
+        if(rawName){
+          return rawName;
+        }
+        if(mappedLabel){
+          return mappedLabel;
         }
         return 'Unknown Set';
       }
