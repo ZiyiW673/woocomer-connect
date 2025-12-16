@@ -1417,6 +1417,17 @@ function ptcgdm_render_builder(array $config = []){
         });
       });
 
+      // Lower the priority of One Piece promotional cards when resolving codes.
+      // Ensure the promotions set is loaded after all other sets so matching
+      // entries from main sets win when IDs overlap.
+      if (IS_ONE_PIECE) {
+        const promoKey = 'promotions';
+        if (ALLOWED_SET_IDS.has(promoKey)) {
+          ALLOWED_SET_IDS.delete(promoKey);
+          ALLOWED_SET_IDS.add(promoKey);
+        }
+      }
+
       function makeDatasetUrl(path) {
         if (path === null || path === undefined) {
           return '';
