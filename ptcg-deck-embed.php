@@ -5044,50 +5044,7 @@ function ptcgdm_render_builder(array $config = []){
 
       function renderManualSyncProgress(status){
         const textEl = els.syncProgressText;
-        if (!textEl) return;
-        const info = (status && typeof status === 'object') ? status : {};
-        const state = typeof info.state === 'string' ? info.state.toLowerCase() : '';
-        let processed = 0;
-        if (typeof info.processedCount === 'number' && Number.isFinite(info.processedCount)) {
-          processed = info.processedCount;
-        } else if (typeof info.processed_count === 'number' && Number.isFinite(info.processed_count)) {
-          processed = info.processed_count;
-        }
-        let total = 0;
-        if (typeof info.totalCount === 'number' && Number.isFinite(info.totalCount)) {
-          total = info.totalCount;
-        } else if (typeof info.total_count === 'number' && Number.isFinite(info.total_count)) {
-          total = info.total_count;
-        }
-        let label = '';
-        if (typeof info.currentCardLabel === 'string') {
-          label = info.currentCardLabel;
-        } else if (typeof info.current_card_label === 'string') {
-          label = info.current_card_label;
-        }
-        const message = typeof info.message === 'string' ? info.message : '';
-        let text = '';
-        if (state === 'running' || state === 'queued') {
-          if (processed > 0 && total > 0 && label) {
-            text = `Processing card ${processed}/${total}: ${label}`;
-          } else if (processed > 0 && total > 0) {
-            text = `Processing card ${processed}/${total}…`;
-          } else if (label) {
-            text = `Processing ${label}`;
-          } else if (message) {
-            text = message;
-          } else {
-            text = 'Inventory sync in progress…';
-          }
-        } else if (message) {
-          text = message;
-        } else {
-          text = '';
-        }
-        if (text) {
-          textEl.textContent = text;
-          textEl.hidden = false;
-        } else {
+        if (textEl) {
           textEl.textContent = '';
           textEl.hidden = true;
         }
@@ -5096,11 +5053,9 @@ function ptcgdm_render_builder(array $config = []){
       function setSyncProgressVisible(visible){
         const bar = els.syncProgress;
         if (bar) {
-          bar.hidden = !visible;
+          bar.hidden = true;
         }
-        if (!visible) {
-          renderManualSyncProgress(null);
-        }
+        renderManualSyncProgress(null);
       }
 
       function finishManualSyncUI(){
