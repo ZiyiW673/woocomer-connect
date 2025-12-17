@@ -1660,6 +1660,7 @@ function ptcgdm_render_builder(array $config = []){
         let manualSyncPollStartedAt = 0;
         const MANUAL_SYNC_STALL_MS = 10 * 60 * 1000; // 10 minutes without progress is considered stalled
         let manualSyncLastProgressAt = 0;
+        const MANUAL_SYNC_SLICE_STALL_MS = 15000;
         const MANUAL_SYNC_SLICE_ACTION = SAVE_CONFIG.manualSyncSliceAction || '';
         const MANUAL_SYNC_SLICE_NONCE = SAVE_CONFIG.manualSyncSliceNonce || '';
         const MANUAL_SYNC_SLICE_INTERVAL = 2500;
@@ -5076,7 +5077,7 @@ function ptcgdm_render_builder(array $config = []){
           message: '',
           runId: '',
           result: '',
-          updated: Date.now(),
+          updated: manualSyncLastProgressAt || 0,
           processedCount: 0,
           totalCount: 0,
           cardIndex: 0,
@@ -5178,11 +5179,15 @@ function ptcgdm_render_builder(array $config = []){
       function handleManualSyncStatusResult(status){
         const normalized = normalizeManualSyncStatus(status || {});
         manualSyncLastState = normalized.state || '';
-        let updatedMs = Date.now();
+        const previousProgressAt = manualSyncLastProgressAt || 0;
+        let updatedMs = previousProgressAt || Date.now();
         if (typeof normalized.updated === 'number' && Number.isFinite(normalized.updated)) {
           updatedMs = normalized.updated < 2000000000 ? normalized.updated * 1000 : normalized.updated;
         }
-        manualSyncLastProgressAt = Math.max(manualSyncLastProgressAt || 0, updatedMs);
+        manualSyncLastProgressAt = Math.max(previousProgressAt, updatedMs);
+        if (manualSyncLastProgressAt > previousProgressAt && manualSyncLastSliceAt) {
+          manualSyncLastSliceAt = 0;
+        }
         if (normalized.runId && manualSyncRunId && normalized.runId === manualSyncRunId) {
           manualSyncRunIdMismatchCount = 0;
         }
@@ -5275,9 +5280,15 @@ function ptcgdm_render_builder(array $config = []){
         pollManualSyncStatus();
       }
 
-      async function maybeRunManualSyncSlice(){
+      function isManualSyncStalled(thresholdMs = MANUAL_SYNC_SLICE_STALL_MS){
+        if (!manualSyncLastProgressAt) return false;
+        return (Date.now() - manualSyncLastProgressAt) > thresholdMs;
+      }
+
+      async function maybeRunManualSyncSlice(force = false){
         if (!manualSyncRunId) return false;
         if (!MANUAL_SYNC_SLICE_ACTION || !MANUAL_SYNC_SLICE_NONCE) return false;
+        if (!force && !isManualSyncStalled()) return false;
         const now = Date.now();
         if (manualSyncLastSliceAt && (now - manualSyncLastSliceAt) < MANUAL_SYNC_SLICE_INTERVAL) {
           return false;
@@ -5295,6 +5306,13 @@ function ptcgdm_render_builder(array $config = []){
           if (response && response.ok && result?.success) {
             const data = result.data || {};
             const jobId = data.job && typeof data.job.jobId === 'string' ? data.job.jobId : '';
+            if (data.job && typeof data.job.updatedAt === 'number') {
+              const jobUpdated = data.job.updatedAt < 2000000000 ? data.job.updatedAt * 1000 : data.job.updatedAt;
+              if (jobUpdated > manualSyncLastProgressAt) {
+                manualSyncLastProgressAt = jobUpdated;
+                manualSyncLastSliceAt = 0;
+              }
+            }
             if (jobId) {
               manualSyncRunId = jobId;
               manualSyncRunIdMismatchCount = 0;
@@ -5329,12 +5347,6 @@ function ptcgdm_render_builder(array $config = []){
             true
           );
           return;
-        }
-        if (manualSyncRunId && (!manualSyncLastState || manualSyncLastState === 'queued' || manualSyncLastState === 'running')) {
-          const sliceHandled = await maybeRunManualSyncSlice();
-          if (sliceHandled) {
-            return;
-          }
         }
         if (manualSyncRunId && MANUAL_SYNC_STATUS_URL) {
           try {
@@ -5384,6 +5396,15 @@ function ptcgdm_render_builder(array $config = []){
         } catch (pollError) {
           const msg = pollError && pollError.message ? pollError.message : pollError;
           stopManualSyncPolling(msg || 'Unable to check sync status.', true);
+        }
+        const stalled = manualSyncRunId
+          && (manualSyncLastState === 'queued' || manualSyncLastState === 'running' || manualSyncLastState === '')
+          && isManualSyncStalled();
+        if (stalled) {
+          const sliceHandled = await maybeRunManualSyncSlice(true);
+          if (sliceHandled) {
+            return;
+          }
         }
       }
 
@@ -6240,6 +6261,19 @@ add_action('wp_ajax_ptcgdm_run_inventory_sync_job_slice', function(){
 
   if ($job_id === '' || $dataset_key === '') {
     wp_send_json_error(['message' => 'Missing jobId/dataset'], 400);
+  }
+
+  $job = ptcgdm_get_inventory_sync_job($job_id);
+  if (!$job) {
+    wp_send_json_error(['message' => 'Job not found'], 404);
+  }
+
+  if (!ptcgdm_inventory_sync_is_stalled($job)) {
+    wp_send_json_success([
+      'status' => ptcgdm_get_inventory_sync_status($dataset_key),
+      'job'    => $job,
+      'note'   => 'Background runner active',
+    ]);
   }
 
   ptcgdm_run_inventory_sync_job_handler([
@@ -8392,6 +8426,24 @@ function ptcgdm_mark_inventory_sync_job_status($job_id, $status, array $override
   }
 
   return $normalized;
+}
+
+function ptcgdm_inventory_sync_is_stalled($job, $threshold = 15) {
+  $threshold = max(1, (int) $threshold);
+  if (!is_array($job) || empty($job)) {
+    return false;
+  }
+
+  $updated = 0;
+  if (isset($job['updatedAt'])) {
+    $updated = (int) $job['updatedAt'];
+  } elseif (isset($job['startedAt'])) {
+    $updated = (int) $job['startedAt'];
+  } elseif (isset($job['updated'])) {
+    $updated = (int) $job['updated'];
+  }
+
+  return ($updated > 0 && (time() - $updated) >= $threshold);
 }
 
 function ptcgdm_schedule_inventory_sync_job($job_id, $dataset_key = '', $scope = 'full') {
