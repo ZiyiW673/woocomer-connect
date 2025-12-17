@@ -4859,12 +4859,105 @@ function ptcgdm_render_builder(array $config = []){
           stopManualSyncPolling(status.message || immediateMessage || 'Inventory sync request sent.', false);
         } catch (err) {
           const msg = err && err.message ? err.message : err;
-          stopManualSyncPolling(msg || 'Unknown error', true);
+          const recovered = await attemptManualSyncRecovery(msg);
+          if (!recovered) {
+            stopManualSyncPolling(msg || 'Unknown error', true);
+          }
         } finally {
           if (!manualSyncPollTimer) {
             finishManualSyncUI();
           }
         }
+      }
+
+      async function fetchManualSyncStatusSnapshot(){
+        const snapshot = { status: null, jobId: '', job: null };
+        if (MANUAL_SYNC_STATUS_URL) {
+          try {
+            const restUrl = manualSyncRunId
+              ? `${MANUAL_SYNC_STATUS_URL}?jobId=${encodeURIComponent(manualSyncRunId)}&dataset=${encodeURIComponent(DATASET_KEY)}`
+              : `${MANUAL_SYNC_STATUS_URL}?dataset=${encodeURIComponent(DATASET_KEY)}`;
+            const restResponse = await fetch(restUrl, { headers: withRestNonce(), credentials: 'include' });
+            if (restResponse && restResponse.ok) {
+              const json = await restResponse.json();
+              if (json && typeof json === 'object') {
+                snapshot.status = json.status || null;
+                snapshot.job = json.job || null;
+                if (typeof json.jobId === 'string') {
+                  snapshot.jobId = json.jobId;
+                } else if (json.job && typeof json.job.jobId === 'string') {
+                  snapshot.jobId = json.job.jobId;
+                }
+                if (snapshot.status || snapshot.jobId) {
+                  return snapshot;
+                }
+              }
+            }
+          } catch (restErr) {
+            // Ignore REST failures; fall back to AJAX polling below.
+          }
+        }
+
+        const action = SAVE_CONFIG.manualSyncStatusAction || '';
+        const nonce = SAVE_CONFIG.manualSyncStatusNonce || '';
+        if (!action || !nonce) {
+          return null;
+        }
+        const body = new FormData();
+        body.append('action', action);
+        body.append('nonce', nonce);
+        body.append('datasetKey', DATASET_KEY);
+        if (manualSyncRunId) {
+          body.append('runId', manualSyncRunId);
+          body.append('jobId', manualSyncRunId);
+        }
+        try {
+          const response = await fetch(AJAX_URL, { method: 'POST', body });
+          const result = await safeParseJsonResponse(response);
+          if (response && response.ok && result?.success) {
+            const data = result.data || {};
+            snapshot.status = data.status || null;
+            snapshot.job = data.job || null;
+            if (typeof data.jobId === 'string') {
+              snapshot.jobId = data.jobId;
+            } else if (data.job && typeof data.job.jobId === 'string') {
+              snapshot.jobId = data.job.jobId;
+            }
+            if (snapshot.status || snapshot.jobId) {
+              return snapshot;
+            }
+          }
+        } catch (ajaxErr) {
+          // Ignore AJAX failures; caller will surface original error.
+        }
+
+        return null;
+      }
+
+      async function attemptManualSyncRecovery(errorMessage){
+        const snapshot = await fetchManualSyncStatusSnapshot();
+        if (!snapshot || !snapshot.status && !snapshot.jobId) {
+          return false;
+        }
+
+        const normalized = normalizeManualSyncStatus(snapshot.status || {});
+        const jobId = snapshot.jobId || normalized.runId || (snapshot.job && typeof snapshot.job.jobId === 'string' ? snapshot.job.jobId : '');
+        if (jobId) {
+          manualSyncRunId = jobId;
+          manualSyncRunIdMismatchCount = 0;
+        }
+
+        const handled = handleManualSyncStatusResult(normalized);
+        if (handled) {
+          return true;
+        }
+
+        if (manualSyncRunId && (normalized.state === 'queued' || normalized.state === 'running')) {
+          startManualSyncPolling();
+          return true;
+        }
+
+        return false;
       }
 
       function renderManualSyncProgress(status){
