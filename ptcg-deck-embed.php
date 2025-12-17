@@ -491,6 +491,72 @@ function ptcgdm_find_managed_product_for_card($card_id, $dataset_key = '') {
   return $product;
 }
 
+function ptcgdm_prune_duplicate_managed_products($card_id, $dataset_key = '', $keep_product_id = 0) {
+  if (!function_exists('wc_get_products')) {
+    return;
+  }
+
+  $card_id = trim((string) $card_id);
+  if ($card_id === '') {
+    return;
+  }
+
+  $dataset_key = ptcgdm_normalize_inventory_dataset_key($dataset_key);
+  $keep_product_id = (int) $keep_product_id;
+
+  $meta_query = [
+    [
+      'key'   => '_ptcgdm_card_id',
+      'value' => $card_id,
+    ],
+    [
+      'key'   => '_ptcgdm_managed',
+      'value' => '1',
+    ],
+  ];
+
+  if ($dataset_key !== '') {
+    $meta_query[] = [
+      'key'   => '_ptcgdm_dataset',
+      'value' => $dataset_key,
+      'compare' => '=',
+    ];
+  }
+
+  $products = wc_get_products([
+    'limit'      => -1,
+    'return'     => 'objects',
+    'status'     => ['publish', 'pending', 'draft', 'private'],
+    'meta_query' => $meta_query,
+  ]);
+
+  if (empty($products)) {
+    return;
+  }
+
+  foreach ($products as $candidate) {
+    if (!($candidate instanceof WC_Product)) {
+      continue;
+    }
+
+    $candidate_id = (int) $candidate->get_id();
+    if ($candidate_id <= 0 || $candidate_id === $keep_product_id) {
+      continue;
+    }
+
+    $candidate_dataset = ptcgdm_get_product_game_slug($candidate_id, $candidate);
+    if ($dataset_key !== '' && $candidate_dataset !== '' && $candidate_dataset !== $dataset_key) {
+      continue;
+    }
+
+    if (function_exists('wp_trash_post')) {
+      wp_trash_post($candidate_id);
+    } elseif (function_exists('wp_delete_post')) {
+      wp_delete_post($candidate_id, true);
+    }
+  }
+}
+
 function ptcgdm_safe_set_product_sku($product, $sku, $dataset_key = '') {
   if (!($product instanceof WC_Product)) {
     return '';
@@ -10412,6 +10478,11 @@ function ptcgdm_sync_inventory_products(array $entries, array $context = []) {
         }
       } else {
         ptcgdm_refresh_product_image_cache($product);
+      }
+
+      $keep_id = $product->get_id();
+      if ($keep_id > 0) {
+        ptcgdm_prune_duplicate_managed_products($card_id, $dataset_key, $keep_id);
       }
 
       $processed_count++;
