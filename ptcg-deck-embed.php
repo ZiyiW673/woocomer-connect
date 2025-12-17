@@ -345,6 +345,23 @@ function ptcgdm_resolve_inventory_product_for_dataset($card_id, $dataset_key = '
   $slug = ptcgdm_slugify_inventory_dataset_key($dataset_key);
   $dataset_sku = $slug !== '' ? $slug . '-' . $base_sku : $base_sku;
 
+  // Prefer an existing managed product for this card/dataset even if the SKU was
+  // renamed in a previous sync; this prevents creating duplicates with new SKUs.
+  $managed_product = ptcgdm_find_managed_product_for_card($card_id, $dataset_key);
+  if ($managed_product instanceof WC_Product) {
+    $managed_product_id = $managed_product->get_id();
+    $managed_sku = ptcgdm_normalize_inventory_sku(method_exists($managed_product, 'get_sku') ? $managed_product->get_sku() : '');
+    if ($managed_sku === '') {
+      $managed_sku = $dataset_sku !== '' ? $dataset_sku : $base_sku;
+    }
+
+    return [
+      'sku' => $managed_sku,
+      'product_id' => $managed_product_id,
+      'product' => $managed_product,
+    ];
+  }
+
   if (!function_exists('wc_get_product_id_by_sku') || !function_exists('wc_get_product')) {
     return [
       'sku' => $base_sku,
@@ -407,6 +424,71 @@ function ptcgdm_resolve_inventory_product_for_dataset($card_id, $dataset_key = '
     'product_id' => 0,
     'product' => null,
   ];
+}
+
+function ptcgdm_find_managed_product_for_card($card_id, $dataset_key = '') {
+  if (!function_exists('wc_get_products')) {
+    return null;
+  }
+
+  $card_id = trim((string) $card_id);
+  if ($card_id === '') {
+    return null;
+  }
+
+  $dataset_key = ptcgdm_normalize_inventory_dataset_key($dataset_key);
+
+  $meta_query = [
+    [
+      'key'   => '_ptcgdm_card_id',
+      'value' => $card_id,
+    ],
+  ];
+
+  if ($dataset_key !== '') {
+    $meta_query[] = [
+      'key'   => '_ptcgdm_dataset',
+      'value' => $dataset_key,
+      'compare' => '=',
+    ];
+  }
+
+  $products = wc_get_products([
+    'limit'      => 1,
+    'return'     => 'objects',
+    'status'     => ['publish', 'pending', 'draft', 'private'],
+    'meta_query' => $meta_query,
+  ]);
+
+  if (empty($products) && $dataset_key !== '') {
+    $products = wc_get_products([
+      'limit'      => 1,
+      'return'     => 'objects',
+      'status'     => ['publish', 'pending', 'draft', 'private'],
+      'meta_query' => [
+        [
+          'key'   => '_ptcgdm_card_id',
+          'value' => $card_id,
+        ],
+      ],
+    ]);
+  }
+
+  if (empty($products)) {
+    return null;
+  }
+
+  $product = $products[0];
+  if (!($product instanceof WC_Product)) {
+    return null;
+  }
+
+  $product_dataset = ptcgdm_get_product_game_slug($product->get_id(), $product);
+  if ($dataset_key !== '' && $product_dataset !== '' && $product_dataset !== $dataset_key) {
+    return null;
+  }
+
+  return $product;
 }
 
 function ptcgdm_safe_set_product_sku($product, $sku, $dataset_key = '') {
