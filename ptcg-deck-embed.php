@@ -1731,6 +1731,8 @@ function ptcgdm_render_builder(array $config = []){
         const MANUAL_SYNC_SLICE_NONCE = SAVE_CONFIG.manualSyncSliceNonce || '';
         const MANUAL_SYNC_SLICE_INTERVAL = 2500;
         let manualSyncLastSliceAt = 0;
+        let manualSyncSliceFailureCount = 0;
+        const MANUAL_SYNC_SLICE_MAX_FAILURES = 3;
         let manualSyncRunIdMismatchCount = 0;
         const MANUAL_SYNC_MAX_RUNID_MISMATCH = 6;
         let manualSyncLastState = '';
@@ -5355,6 +5357,7 @@ function ptcgdm_render_builder(array $config = []){
         if (!manualSyncRunId) return false;
         if (!MANUAL_SYNC_SLICE_ACTION || !MANUAL_SYNC_SLICE_NONCE) return false;
         if (!force && !isManualSyncStalled()) return false;
+        if (manualSyncSliceFailureCount >= MANUAL_SYNC_SLICE_MAX_FAILURES) return false;
         const now = Date.now();
         if (manualSyncLastSliceAt && (now - manualSyncLastSliceAt) < MANUAL_SYNC_SLICE_INTERVAL) {
           return false;
@@ -5386,14 +5389,20 @@ function ptcgdm_render_builder(array $config = []){
             if (data.status) {
               const handled = handleManualSyncStatusResult(data.status);
               if (handled) {
+                manualSyncSliceFailureCount = 0;
                 return true;
               }
             }
+            manualSyncSliceFailureCount = 0;
           } else {
             manualSyncLastSliceAt = 0;
+            manualSyncSliceFailureCount += 1;
+            manualSyncLastProgressAt = Math.max(manualSyncLastProgressAt || 0, Date.now());
           }
         } catch (err) {
           manualSyncLastSliceAt = 0;
+          manualSyncSliceFailureCount += 1;
+          manualSyncLastProgressAt = Math.max(manualSyncLastProgressAt || 0, Date.now());
         }
         return false;
       }
