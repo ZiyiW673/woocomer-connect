@@ -8218,9 +8218,20 @@ function ptcgdm_get_inventory_sync_job_ttl() {
 }
 
 function ptcgdm_get_inventory_sync_chunk_limit() {
-  $default = 100;
+  $default = 25;
   if (function_exists('apply_filters')) {
     $filtered = apply_filters('ptcgdm_inventory_sync_chunk_limit', $default);
+    if (is_numeric($filtered)) {
+      $default = max(1, (int) $filtered);
+    }
+  }
+  return $default;
+}
+
+function ptcgdm_get_inventory_sync_chunk_time_budget_seconds() {
+  $default = 10;
+  if (function_exists('apply_filters')) {
+    $filtered = apply_filters('ptcgdm_inventory_sync_chunk_time_budget_seconds', $default);
     if (is_numeric($filtered)) {
       $default = max(1, (int) $filtered);
     }
@@ -10005,6 +10016,7 @@ function ptcgdm_sync_inventory_products(array $entries, array $context = []) {
   $prepared_entries_override = isset($context['prepared_entries']) && is_array($context['prepared_entries']) ? array_values($context['prepared_entries']) : null;
   $start_offset = isset($context['offset']) ? max(0, (int) $context['offset']) : 0;
   $chunk_limit = isset($context['limit']) ? (int) $context['limit'] : 0;
+  $chunk_time_budget = ptcgdm_get_inventory_sync_chunk_time_budget_seconds();
   $total_count_override = isset($context['total_count']) ? (int) $context['total_count'] : 0;
   if (function_exists('apply_filters')) {
     $progress_step = (int) apply_filters('ptcgdm_inventory_sync_progress_step', $progress_step, $context);
@@ -10043,6 +10055,7 @@ function ptcgdm_sync_inventory_products(array $entries, array $context = []) {
 
   $processed_count = $start_offset;
   $skipped_other_game_products = 0;
+  $chunk_started_at = microtime(true);
 
   try {
     $synced_skus = [];
@@ -10316,6 +10329,10 @@ function ptcgdm_sync_inventory_products(array $entries, array $context = []) {
       }
 
       $synced_skus[$sku] = true;
+
+      if ($chunk_time_budget > 0 && (microtime(true) - $chunk_started_at) >= $chunk_time_budget) {
+        break;
+      }
     }
 
     $has_more = $processed_count < $total_count;
