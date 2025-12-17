@@ -8934,6 +8934,17 @@ function ptcgdm_run_inventory_sync_job_handler($job_arg = '', $dataset_key = '',
     'progress'=> $has_more ? $progress : 100,
   ];
 
+  // If we didn't advance during this chunk, bail out to avoid infinite requeue
+  // loops that can keep the site busy and surface as 524 errors.
+  if ($has_more && $processed_total <= $offset) {
+    ptcgdm_mark_inventory_sync_job_status($job_id, 'error', array_merge($job_update, [
+      'message' => __('Inventory sync stalled (no progress this chunk). Please retry manual sync.', 'ptcgdm'),
+      'result'  => 'error',
+      'status'  => 'error',
+    ]));
+    return;
+  }
+
   if ($has_more) {
     ptcgdm_mark_inventory_sync_job_status($job_id, 'running', array_merge($job_update, [
       'message' => __('Inventory sync is running…', 'ptcgdm'),
