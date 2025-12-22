@@ -373,18 +373,20 @@ function ptcgdm_resolve_inventory_product_for_dataset($card_id, $dataset_key = '
   $base_product_id = $base_sku !== '' ? (int) wc_get_product_id_by_sku($base_sku) : 0;
   if ($base_product_id > 0) {
     $base_product = wc_get_product($base_product_id);
+
     $assigned_dataset = '';
+    $bound_card_id = '';
+
     if ($base_product instanceof WC_Product && method_exists($base_product, 'get_meta')) {
       $assigned_dataset = ptcgdm_normalize_inventory_dataset_key($base_product->get_meta('_ptcgdm_dataset', true));
+      $bound_card_id = trim((string) $base_product->get_meta('_ptcgdm_card_id', true));
     }
 
-    $product_game = ptcgdm_get_product_game_slug($base_product_id, $base_product);
-
-    if ($assigned_dataset === '' && $product_game !== '') {
-      $assigned_dataset = $product_game;
-    }
-
-    if ($assigned_dataset === '' || $assigned_dataset === $dataset_key) {
+    // Only reuse a base SKU product if it is explicitly bound to this card (and dataset, when provided).
+    if (
+      $bound_card_id === (string) $card_id &&
+      ($dataset_key === '' || $assigned_dataset === $dataset_key)
+    ) {
       return [
         'sku' => $base_sku,
         'product_id' => $base_product_id,
