@@ -1719,14 +1719,14 @@ function ptcgdm_render_builder(array $config = []){
         let isManualSyncing = false;
         let manualSyncRunId = '';
         let manualSyncPollTimer = 0;
-        const MANUAL_SYNC_POLL_INTERVAL = Math.max(3000, Number(SAVE_CONFIG.manualSyncPollInterval) || 5000);
+        const MANUAL_SYNC_POLL_INTERVAL = Math.max(2000, Number(SAVE_CONFIG.manualSyncPollInterval) || 4000);
         const MANUAL_SYNC_STATUS_URL = (typeof SAVE_CONFIG.manualSyncStatusRest === 'string' && SAVE_CONFIG.manualSyncStatusRest)
           ? SAVE_CONFIG.manualSyncStatusRest
           : `${API_BASE}/sync-status`;
         let manualSyncPollStartedAt = 0;
         const MANUAL_SYNC_STALL_MS = 10 * 60 * 1000; // 10 minutes without progress is considered stalled
         let manualSyncLastProgressAt = 0;
-        const MANUAL_SYNC_SLICE_STALL_MS = 15000;
+        const MANUAL_SYNC_SLICE_STALL_MS = 10000;
         const MANUAL_SYNC_SLICE_ACTION = SAVE_CONFIG.manualSyncSliceAction || '';
         const MANUAL_SYNC_SLICE_NONCE = SAVE_CONFIG.manualSyncSliceNonce || '';
         const MANUAL_SYNC_SLICE_INTERVAL = 2500;
@@ -8364,7 +8364,7 @@ function ptcgdm_get_inventory_sync_job_ttl() {
 }
 
 function ptcgdm_get_inventory_sync_chunk_limit() {
-  $default = 25;
+  $default = 50;
   if (function_exists('apply_filters')) {
     $filtered = apply_filters('ptcgdm_inventory_sync_chunk_limit', $default);
     if (is_numeric($filtered)) {
@@ -8503,7 +8503,7 @@ function ptcgdm_mark_inventory_sync_job_status($job_id, $status, array $override
   return $normalized;
 }
 
-function ptcgdm_inventory_sync_is_stalled($job, $threshold = 15) {
+function ptcgdm_inventory_sync_is_stalled($job, $threshold = 10) {
   $threshold = max(1, (int) $threshold);
   if (!is_array($job) || empty($job)) {
     return false;
