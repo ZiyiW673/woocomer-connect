@@ -866,6 +866,62 @@ function ptcgdm_ensure_inventory_directory() {
   return $dir;
 }
 
+function ptcgdm_queue_scoped_inventory_sync_job_for_dataset($dataset_key) {
+  $dataset_key = ptcgdm_normalize_inventory_dataset_key($dataset_key);
+  if ($dataset_key === '') {
+    return new WP_Error('invalid_dataset', __('Invalid dataset key.', 'ptcgdm'));
+  }
+
+  $active_job = ptcgdm_get_active_inventory_sync_job($dataset_key);
+  if ($active_job && in_array($active_job['status'], ['queued', 'running'], true)) {
+    return [
+      'queued'          => true,
+      'status'          => ptcgdm_get_inventory_sync_status($dataset_key),
+      'job'             => $active_job,
+      'jobId'           => isset($active_job['jobId']) ? $active_job['jobId'] : '',
+      'alreadyRunning'  => true,
+    ];
+  }
+
+  $run_id = ptcgdm_generate_inventory_sync_run_id();
+  $queued_message = __('Inventory sync queued. WooCommerce products will update shortly.', 'ptcgdm');
+
+  ptcgdm_set_inventory_sync_status('queued', $queued_message, ptcgdm_build_inventory_sync_status_extra($run_id, [
+    'result'  => '',
+    'dataset' => $dataset_key,
+  ]), $dataset_key);
+
+  $job = ptcgdm_mark_inventory_sync_job_status($run_id, 'queued', [
+    'dataset'  => $dataset_key,
+    'scope'    => 'scoped',
+    'message'  => $queued_message,
+    'offset'   => 0,
+    'limit'    => ptcgdm_get_inventory_sync_chunk_limit(),
+    'total'    => 0,
+    'progress' => 0,
+  ]);
+
+  $scheduled = ptcgdm_schedule_inventory_sync_job($run_id, $dataset_key, 'scoped');
+  if (!$scheduled) {
+    ptcgdm_mark_inventory_sync_job_status($run_id, 'error', [
+      'dataset' => $dataset_key,
+      'scope'   => 'scoped',
+      'message' => __('Unable to queue inventory sync.', 'ptcgdm'),
+    ]);
+
+    return new WP_Error('queue_failed', __('Unable to queue inventory sync.', 'ptcgdm'));
+  }
+
+  ptcgdm_requeue_inventory_sync_job($run_id, $dataset_key, 'scoped');
+
+  return [
+    'queued' => true,
+    'status' => ptcgdm_get_inventory_sync_status($dataset_key),
+    'job'    => $job,
+    'jobId'  => $run_id,
+  ];
+}
+
 register_activation_hook(__FILE__, function () {
   if (!file_exists(PTCGDM_DATA_DIR)) {
     wp_mkdir_p(PTCGDM_DATA_DIR);
@@ -6043,19 +6099,21 @@ add_action('wp_ajax_ptcgdm_save_inventory', function(){
   }
 
   if ($prefer_async_sync) {
-    $syncQueued = ptcgdm_trigger_inventory_sync($dataset_key, 'scoped');
-    if ($syncQueued) {
-      $syncStatus = ptcgdm_get_inventory_sync_status($dataset_key);
-    } elseif (is_wp_error($syncQueued)) {
-      $syncError = $syncQueued->get_error_message();
-    } else {
+    $queue_result = ptcgdm_queue_scoped_inventory_sync_job_for_dataset($dataset_key);
+    if (is_wp_error($queue_result)) {
+      $syncError = $queue_result->get_error_message();
       $syncResult = ptcgdm_run_inventory_sync_now(['dataset' => $dataset_key, 'scope' => 'scoped']);
       if ($syncResult === true) {
         $syncStatus = ptcgdm_get_inventory_sync_status($dataset_key);
       } elseif (is_wp_error($syncResult)) {
         $syncError = $syncResult->get_error_message();
       } else {
-        $syncError = __('Inventory sync could not be started.', 'ptcgdm');
+        $syncError = $syncError ?: __('Inventory sync could not be started.', 'ptcgdm');
+      }
+    } else {
+      $syncQueued = !empty($queue_result['queued']);
+      if (!empty($queue_result['status'])) {
+        $syncStatus = $queue_result['status'];
       }
     }
   } else {
