@@ -10265,6 +10265,7 @@ function ptcgdm_sync_inventory_products(array $entries, array $context = []) {
   $progress_step = isset($context['progress_step']) ? (int) $context['progress_step'] : 5;
   $dataset_key = ptcgdm_resolve_inventory_dataset_key($context);
   $sync_scope = ptcgdm_normalize_inventory_sync_scope(isset($context['scope']) ? $context['scope'] : 'full');
+  $prune_duplicates = ($sync_scope === 'full');
   $prepared_entries_override = isset($context['prepared_entries']) && is_array($context['prepared_entries']) ? array_values($context['prepared_entries']) : null;
   $start_offset = isset($context['offset']) ? max(0, (int) $context['offset']) : 0;
   $chunk_limit = isset($context['limit']) ? (int) $context['limit'] : 0;
@@ -10567,7 +10568,7 @@ function ptcgdm_sync_inventory_products(array $entries, array $context = []) {
       }
 
       $keep_id = $product->get_id();
-      if ($keep_id > 0) {
+      if ($keep_id > 0 && $prune_duplicates) {
         ptcgdm_prune_duplicate_managed_products($card_id, $dataset_key, $keep_id, $sku);
       }
 
