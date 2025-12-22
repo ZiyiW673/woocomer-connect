@@ -491,7 +491,7 @@ function ptcgdm_find_managed_product_for_card($card_id, $dataset_key = '') {
   return $product;
 }
 
-function ptcgdm_prune_duplicate_managed_products($card_id, $dataset_key = '', $keep_product_id = 0) {
+function ptcgdm_prune_duplicate_managed_products($card_id, $dataset_key = '', $keep_product_id = 0, $keep_sku = '') {
   if (!function_exists('wc_get_products')) {
     return;
   }
@@ -503,6 +503,20 @@ function ptcgdm_prune_duplicate_managed_products($card_id, $dataset_key = '', $k
 
   $dataset_key = ptcgdm_normalize_inventory_dataset_key($dataset_key);
   $keep_product_id = (int) $keep_product_id;
+
+  // If we don't have a saved product to keep, avoid any deletion to prevent
+  // unintended cleanup runs that could trash unrelated items.
+  if ($keep_product_id <= 0) {
+    return;
+  }
+
+  $keep_sku = ptcgdm_normalize_inventory_sku($keep_sku);
+  if ($keep_sku === '') {
+    $keep_product = wc_get_product($keep_product_id);
+    if ($keep_product instanceof WC_Product) {
+      $keep_sku = ptcgdm_normalize_inventory_sku($keep_product->get_sku());
+    }
+  }
 
   $meta_query = [
     [
@@ -546,6 +560,11 @@ function ptcgdm_prune_duplicate_managed_products($card_id, $dataset_key = '', $k
 
     $candidate_dataset = ptcgdm_get_product_game_slug($candidate_id, $candidate);
     if ($dataset_key !== '' && $candidate_dataset !== '' && $candidate_dataset !== $dataset_key) {
+      continue;
+    }
+
+    $candidate_sku = ptcgdm_normalize_inventory_sku($candidate->get_sku());
+    if ($keep_sku !== '' && $candidate_sku !== '' && $candidate_sku !== $keep_sku) {
       continue;
     }
 
@@ -10549,7 +10568,7 @@ function ptcgdm_sync_inventory_products(array $entries, array $context = []) {
 
       $keep_id = $product->get_id();
       if ($keep_id > 0) {
-        ptcgdm_prune_duplicate_managed_products($card_id, $dataset_key, $keep_id);
+        ptcgdm_prune_duplicate_managed_products($card_id, $dataset_key, $keep_id, $sku);
       }
 
       $processed_count++;
