@@ -5052,6 +5052,106 @@ function ptcgdm_render_builder(array $config = []){
         }
         return true;
       }
+      async function fetchEncryptedInventoryPending(){
+        const res = await fetch(`${API_BASE}/encrypted-inventory-pending?dataset=${encodeURIComponent(DATASET_KEY)}`, {
+          credentials: 'include',
+          headers: withRestNonce(),
+        });
+        if (!res.ok) {
+          return [];
+        }
+        try {
+          const payload = await res.json();
+          return Array.isArray(payload?.cards) ? payload.cards : [];
+        } catch (err) {
+          return [];
+        }
+      }
+      async function clearEncryptedInventoryPending(){
+        await fetch(`${API_BASE}/encrypted-inventory-pending`, {
+          method: 'POST',
+          credentials: 'include',
+          headers: withRestNonce({ 'Content-Type': 'application/json' }),
+          body: JSON.stringify({ dataset: DATASET_KEY, action: 'clear' }),
+        });
+      }
+      function applyEncryptedInventoryPendingEntry(entry){
+        if(!entry || !entry.id) return false;
+        const id = String(entry.id).trim();
+        if(!id) return false;
+        const variants = entry.variants && typeof entry.variants === 'object' ? entry.variants : {};
+        const normalized = {};
+        Object.entries(variants).forEach(([key, value]) => {
+          const rawQty = value && typeof value === 'object' && value.qty !== undefined ? value.qty : value;
+          const parsed = clampBufferQty(parseInt(rawQty, 10));
+          if(Number.isFinite(parsed)) {
+            normalized[key] = parsed;
+          }
+        });
+        if(!Object.keys(normalized).length && entry.qty !== undefined){
+          const parsed = clampBufferQty(parseInt(entry.qty, 10));
+          if(Number.isFinite(parsed)) {
+            normalized.normal = parsed;
+          }
+        }
+        let nextTotal = 0;
+        Object.values(normalized).forEach(qty => {
+          if(Number.isFinite(qty)) nextTotal += qty;
+        });
+        const existingIndex = deckMap.get(id);
+        if(nextTotal <= 0){
+          if(existingIndex !== undefined){
+            deck.splice(existingIndex, 1);
+            deckMap.clear();
+            deck.forEach((item, index) => deckMap.set(item.id, index));
+            return true;
+          }
+          return false;
+        }
+        let entryRef = null;
+        if(existingIndex === undefined){
+          entryRef = { id, variants: {} };
+          deck.push(entryRef);
+          deckMap.set(id, deck.length - 1);
+        } else {
+          entryRef = deck[existingIndex];
+        }
+        Object.entries(normalized).forEach(([key, qty]) => {
+          const variant = getInventoryVariant(entryRef, key);
+          variant.qty = qty;
+          cleanInventoryVariant(entryRef, key);
+        });
+        sumInventoryVariantQuantities(entryRef);
+        return true;
+      }
+      async function applyEncryptedInventoryPendingUpdates(){
+        if (!IS_INVENTORY) return 0;
+        const pending = await fetchEncryptedInventoryPending();
+        if (!pending.length) return 0;
+        let appliedCount = 0;
+        let changed = false;
+        pending.forEach(entry => {
+          const applied = applyEncryptedInventoryPendingEntry(entry);
+          if (applied) {
+            appliedCount += 1;
+            changed = true;
+          }
+        });
+        if (!changed) {
+          await clearEncryptedInventoryPending();
+          return 0;
+        }
+        renderDeckTable();
+        updateJSON();
+        try {
+          await saveEncryptedInventorySnapshot();
+        } catch (err) {
+          console.error('Failed to persist encrypted inventory updates', err);
+          return 0;
+        }
+        await clearEncryptedInventoryPending();
+        return appliedCount;
+      }
       async function getMasterKeyFromBridge(usages = ['decrypt']){
         const bridge = resolveZkBridge();
         if (!bridge || typeof bridge.getMasterKeyBytes !== 'function') return null;
@@ -5082,7 +5182,13 @@ function ptcgdm_render_builder(array $config = []){
         const text = new TextDecoder().decode(plaintext);
         const data = text ? JSON.parse(text) : {};
         applyDeckData(data, { updateInventory: true });
-        setLoadStatus('Loaded saved inventory.');
+        const pendingApplied = await applyEncryptedInventoryPendingUpdates();
+        if (pendingApplied > 0) {
+          const label = pendingApplied === 1 ? 'update' : 'updates';
+          setLoadStatus(`Loaded saved inventory (applied ${pendingApplied} stock ${label}).`);
+        } else {
+          setLoadStatus('Loaded saved inventory.');
+        }
         encryptedInventoryLoaded = true;
         return true;
       }
@@ -8306,6 +8412,30 @@ function ptcgdm_normalize_inventory_quantity($value, $allow_negative = false) {
   return $qty;
 }
 
+function ptcgdm_normalize_inventory_variant_quantities($variant_quantities, $fallback_quantity = 0) {
+  $normalized = [];
+  if (!is_array($variant_quantities)) {
+    return ['normal' => max(0, (int) $fallback_quantity)];
+  }
+  foreach ($variant_quantities as $key => $value) {
+    $normalized_key = is_string($key) ? trim($key) : '';
+    if ($normalized_key === '') {
+      continue;
+    }
+    if (!array_key_exists($normalized_key, ptcgdm_get_inventory_variant_labels())) {
+      $normalized_key = ptcgdm_inventory_variant_key_from_label($normalized_key);
+    }
+    if ($normalized_key === '' || !array_key_exists($normalized_key, ptcgdm_get_inventory_variant_labels())) {
+      continue;
+    }
+    $normalized[$normalized_key] = max(0, ptcgdm_normalize_inventory_quantity($value));
+  }
+  if (!$normalized) {
+    $normalized['normal'] = max(0, (int) $fallback_quantity);
+  }
+  return $normalized;
+}
+
 function ptcgdm_normalize_special_pattern_slot($slot, $allow_negative = false) {
   $qty = ptcgdm_normalize_inventory_quantity($slot['qty'] ?? 0, $allow_negative);
   $price = array_key_exists('price', (array) $slot) ? ptcgdm_normalize_inventory_price($slot['price']) : null;
@@ -9592,14 +9722,27 @@ function ptcgdm_update_inventory_card_quantity($card_id, $quantity, ?array $vari
     return false;
   }
 
+  if ($dataset_key === '') {
+    $dataset_key = ptcgdm_detect_dataset_from_card_id($card_id);
+  }
+  $dataset_key = ptcgdm_normalize_inventory_dataset_key($dataset_key);
+
   $dir = trailingslashit(ptcgdm_get_inventory_dir());
   $path = ptcgdm_get_inventory_path_for_dataset($dataset_key);
+  $meta = ptcgdm_get_encryption_meta();
+  $encrypted_at_rest = isset($meta['status']) && $meta['status'] === 'encrypted_v1';
   if (!file_exists($path) || !is_readable($path)) {
+    if ($encrypted_at_rest) {
+      return ptcgdm_record_encrypted_inventory_adjustment($card_id, $quantity, $variant_quantities, $dataset_key);
+    }
     return false;
   }
 
   $raw = @file_get_contents($path);
   if ($raw === false || $raw === '') {
+    if ($encrypted_at_rest) {
+      return ptcgdm_record_encrypted_inventory_adjustment($card_id, $quantity, $variant_quantities, $dataset_key);
+    }
     return false;
   }
 
@@ -9617,24 +9760,7 @@ function ptcgdm_update_inventory_card_quantity($card_id, $quantity, ?array $vari
   if ($variant_quantities === null) {
     $variant_quantities = ['normal' => $quantity];
   } else {
-    $normalized = [];
-    foreach ($variant_quantities as $key => $value) {
-      $normalized_key = is_string($key) ? trim($key) : '';
-      if ($normalized_key === '') {
-        continue;
-      }
-      if (!array_key_exists($normalized_key, ptcgdm_get_inventory_variant_labels())) {
-        $normalized_key = ptcgdm_inventory_variant_key_from_label($normalized_key);
-      }
-      if ($normalized_key === '' || !array_key_exists($normalized_key, ptcgdm_get_inventory_variant_labels())) {
-        continue;
-      }
-      $normalized[$normalized_key] = max(0, ptcgdm_normalize_inventory_quantity($value));
-    }
-    if (!$normalized) {
-      $normalized['normal'] = $quantity;
-    }
-    $variant_quantities = $normalized;
+    $variant_quantities = ptcgdm_normalize_inventory_variant_quantities($variant_quantities, $quantity);
   }
 
   $found_index = null;
@@ -10196,6 +10322,58 @@ function ptcgdm_extract_encrypted_payload($decoded) {
   ];
 }
 
+function ptcgdm_get_encrypted_inventory_pending_entries($dataset_key = '') {
+  $dataset = ptcgdm_normalize_inventory_dataset_key($dataset_key);
+  $pending = get_option('ptcgdm_encrypted_inventory_pending', []);
+  if (!is_array($pending)) {
+    $pending = [];
+  }
+  $entries = $pending[$dataset] ?? [];
+  return is_array($entries) ? $entries : [];
+}
+
+function ptcgdm_set_encrypted_inventory_pending_entries($dataset_key, array $entries) {
+  $dataset = ptcgdm_normalize_inventory_dataset_key($dataset_key);
+  if ($dataset === '') {
+    return false;
+  }
+  $pending = get_option('ptcgdm_encrypted_inventory_pending', []);
+  if (!is_array($pending)) {
+    $pending = [];
+  }
+  if ($entries) {
+    $pending[$dataset] = $entries;
+  } else {
+    unset($pending[$dataset]);
+  }
+  update_option('ptcgdm_encrypted_inventory_pending', $pending, false);
+  return true;
+}
+
+function ptcgdm_record_encrypted_inventory_adjustment($card_id, $quantity, ?array $variant_quantities = null, $dataset_key = '') {
+  $card_id = trim((string) $card_id);
+  if ($card_id === '') {
+    return false;
+  }
+  $dataset = ptcgdm_normalize_inventory_dataset_key($dataset_key);
+  if ($dataset === '') {
+    return false;
+  }
+  $entries = ptcgdm_get_encrypted_inventory_pending_entries($dataset);
+  $normalized_variants = ptcgdm_normalize_inventory_variant_quantities($variant_quantities, $quantity);
+  $variants = [];
+  foreach ($normalized_variants as $key => $value) {
+    $variants[$key] = ['qty' => max(0, (int) $value)];
+  }
+  $entries[$card_id] = [
+    'id'         => $card_id,
+    'qty'        => max(0, (int) $quantity),
+    'variants'   => $variants,
+    'updated_at' => time(),
+  ];
+  return ptcgdm_set_encrypted_inventory_pending_entries($dataset, $entries);
+}
+
 /**
  * Register REST routes for encryption metadata and encrypted payload storage.
  */
@@ -10363,6 +10541,47 @@ function ptcgdm_register_encryption_routes() {
       }
 
       return [ 'dataset' => $dataset, 'meta' => $meta ];
+    },
+    'permission_callback' => function () {
+      return ptcgdm_admin_ui_is_authorized();
+    },
+  ]);
+
+  register_rest_route('ptcgdm/v1', '/encrypted-inventory-pending', [
+    'methods'  => WP_REST_Server::READABLE,
+    'callback' => function (WP_REST_Request $request) {
+      $dataset = ptcgdm_normalize_inventory_dataset_key($request->get_param('dataset'));
+      $entries = ptcgdm_get_encrypted_inventory_pending_entries($dataset);
+      return [
+        'dataset' => $dataset,
+        'cards'   => array_values($entries),
+      ];
+    },
+    'permission_callback' => function () {
+      return ptcgdm_admin_ui_is_authorized();
+    },
+  ]);
+
+  register_rest_route('ptcgdm/v1', '/encrypted-inventory-pending', [
+    'methods'  => WP_REST_Server::EDITABLE,
+    'callback' => function (WP_REST_Request $request) {
+      $body = json_decode($request->get_body(), true);
+      if (!is_array($body)) {
+        return new WP_Error('invalid_body', 'Invalid payload.', ['status' => 400]);
+      }
+      $dataset = ptcgdm_normalize_inventory_dataset_key($body['dataset'] ?? '');
+      if ($dataset === '') {
+        return new WP_Error('invalid_dataset', 'Dataset missing.', ['status' => 400]);
+      }
+      $action = isset($body['action']) ? sanitize_text_field((string) $body['action']) : '';
+      if ($action !== 'clear') {
+        return new WP_Error('invalid_action', 'Invalid action.', ['status' => 400]);
+      }
+      ptcgdm_set_encrypted_inventory_pending_entries($dataset, []);
+      return [
+        'dataset' => $dataset,
+        'cleared' => true,
+      ];
     },
     'permission_callback' => function () {
       return ptcgdm_admin_ui_is_authorized();
