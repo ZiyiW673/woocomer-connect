@@ -2011,6 +2011,10 @@ function ptcgdm_render_builder(array $config = []){
                 }
               }
               applyDatasetSpecificCardAdjustments(c);
+              const existing = byId.get(c.id);
+              if(existing && shouldSkipDuplicateCard(existing, c)){
+                continue;
+              }
               registerCardNumberIndex(canonicalId, c);
               registerCardNameIndex(canonicalId, c);
               byId.set(c.id,c);
@@ -2093,11 +2097,10 @@ function ptcgdm_render_builder(array $config = []){
         const canonicalId = String(resolvedId || '').trim().toLowerCase();
         if (canonicalId) {
           merged.id = canonicalId;
-          if (!merged.name) {
-            const label = SET_LABELS[canonicalId];
-            if (label) {
-              merged.name = label;
-            }
+          const label = SET_LABELS[canonicalId];
+          const shouldOverrideName = IS_ONE_PIECE && label && isGenericSetName(merged.name, canonicalId);
+          if (label && (!merged.name || shouldOverrideName)) {
+            merged.name = label;
           }
         }
         if(info.images || current.images){
@@ -2219,6 +2222,36 @@ function ptcgdm_render_builder(array $config = []){
 
       function makeSetKey(id){
         return String(id || '').trim().toLowerCase();
+      }
+
+      function normaliseSetNameKey(value){
+        return String(value || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '');
+      }
+
+      function isGenericSetName(name, setId){
+        const label = String(name || '').trim();
+        if(!label) return true;
+        const normalisedName = normaliseSetNameKey(label);
+        const normalisedId = normaliseSetNameKey(setId);
+        if(!normalisedName || !normalisedId) return false;
+        return normalisedName === normalisedId;
+      }
+
+      function isOnePiecePromotionCard(card){
+        if(!IS_ONE_PIECE || !card) return false;
+        const setId = String(card?.set?.id || '').trim().toLowerCase();
+        if(setId === 'promotions') return true;
+        const setName = String(card?.set?.name || '').trim();
+        return /promotion/i.test(setName);
+      }
+
+      function shouldSkipDuplicateCard(existing, candidate){
+        if(!existing || !candidate) return false;
+        if(!IS_ONE_PIECE) return false;
+        const existingPromo = isOnePiecePromotionCard(existing);
+        const candidatePromo = isOnePiecePromotionCard(candidate);
+        if(!existingPromo && candidatePromo) return true;
+        return false;
       }
 
       function makeNameKey(name){
