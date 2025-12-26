@@ -3387,7 +3387,13 @@ function ptcgdm_render_builder(array $config = []){
           const busy = els.inventoryBulkPriceRules.dataset.busy === '1';
           const applySelectedOnly = !!els.inventoryPriceRuleSelectedOnly?.checked;
           const hasTargets = applySelectedOnly ? selectedCount > 0 : rows.length > 0;
-          els.inventoryBulkPriceRules.disabled = busy || !hasTargets;
+          const locked = isInventoryLocked();
+          els.inventoryBulkPriceRules.disabled = busy || locked || !hasTargets;
+          if(locked){
+            els.inventoryBulkPriceRules.title = 'Unlock in the Security tab to apply price rules.';
+          }else{
+            els.inventoryBulkPriceRules.removeAttribute('title');
+          }
         }
         if(els.inventoryBulkDelete){
           const busy = els.inventoryBulkDelete.dataset.busy === '1';
@@ -3462,28 +3468,6 @@ function ptcgdm_render_builder(array $config = []){
             priceInput.select();
           }
         }
-        return true;
-      }
-
-      function upsertDeckEntry(entry){
-        if(!entry || !entry.id) return false;
-        let replaced = false;
-        if(deckMap.has(entry.id)){
-          const idx = deckMap.get(entry.id);
-          if(idx !== undefined){
-            deck[idx] = entry;
-            replaced = true;
-          }
-        }
-        if(!replaced){
-          deck.push(entry);
-        }
-        deckMap.clear();
-        deck.forEach((item, index)=>{
-          if(item && item.id){
-            deckMap.set(item.id, index);
-          }
-        });
         return true;
       }
 
@@ -3757,9 +3741,13 @@ function ptcgdm_render_builder(array $config = []){
         syncInventorySelectionsWithRows();
       }
 
-      function handleInventoryBulkPriceRules(event){
+      async function handleInventoryBulkPriceRules(event){
         event.preventDefault();
         if(!IS_INVENTORY) return;
+        if(isInventoryLocked()){
+          alert('Inventory is encrypted. Please unlock it in the Security tab before applying price rules.');
+          return;
+        }
         const rules = getInventoryBulkPriceRuleValues();
         const applySelectedOnly = rules.applySelectedOnly;
         const selectedIds = Array.from(inventoryBulkSelection);
@@ -3787,6 +3775,7 @@ function ptcgdm_render_builder(array $config = []){
           els.inventoryBulkPriceRules.dataset.busy = '1';
           els.inventoryBulkPriceRules.textContent = 'Applying…';
         }
+        const encryptedMode = await isEncryptedInventoryMode();
         let updatedPrices = 0;
         let updatedCards = 0;
         inventoryData.forEach((entry)=>{
@@ -3805,6 +3794,16 @@ function ptcgdm_render_builder(array $config = []){
         if(updatedPrices > 0){
           renderInventoryDataTable();
           updateJSON();
+          if(encryptedMode){
+            try {
+              await saveEncryptedInventorySnapshot();
+            } catch (err) {
+              const message = err && err.message ? err.message : err;
+              alert(`Failed to save encrypted inventory: ${message}`);
+              renderInventoryDataTable();
+              updateJSON();
+            }
+          }
         }
         alert(`Updated ${updatedPrices} prices across ${updatedCards} cards.`);
       }
