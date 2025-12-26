@@ -3504,25 +3504,31 @@ function ptcgdm_render_builder(array $config = []){
       }
 
       function applyInventoryPriceRulesToEntry(entry, rules){
-        if(!entry || !entry.variants || typeof entry.variants !== 'object') return entry;
+        if(!entry || !entry.variants || typeof entry.variants !== 'object') return { changedVariants: 0 };
+        let changedVariants = 0;
         Object.keys(entry.variants).forEach((key)=>{
           const variant = entry.variants[key];
           if(!variant || typeof variant !== 'object') return;
-          let price = parsePriceValue(variant.price);
-          if(!Number.isFinite(price)) return;
+          const currentPrice = parsePriceInput(variant.price);
+          if(!Number.isFinite(currentPrice)) return;
+          let nextPrice = currentPrice;
           const floor = Number.isFinite(rules.floor) ? rules.floor : 0;
-          if(price < floor){
-            price = floor;
+          if(nextPrice < floor){
+            nextPrice = floor;
           }
           if(Number.isFinite(rules.rounding) && rules.rounding > 0){
-            price = Math.round(price / rules.rounding) * rules.rounding;
+            nextPrice = Math.round(nextPrice / rules.rounding) * rules.rounding;
           }
-          if(price < floor){
-            price = floor;
+          if(nextPrice < floor){
+            nextPrice = floor;
           }
-          variant.price = Math.round(price * 100) / 100;
+          nextPrice = Math.round(nextPrice * 100) / 100;
+          if(nextPrice !== currentPrice){
+            variant.price = nextPrice;
+            changedVariants += 1;
+          }
         });
-        return entry;
+        return { changedVariants };
       }
 
       function removeInventoryEntryLocal(cardId){
@@ -3756,9 +3762,10 @@ function ptcgdm_render_builder(array $config = []){
         if(!IS_INVENTORY) return;
         const rules = getInventoryBulkPriceRuleValues();
         const applySelectedOnly = rules.applySelectedOnly;
-        const selectedIds = getInventorySelectionIds();
+        const selectedIds = Array.from(inventoryBulkSelection);
         const visibleIds = getVisibleInventoryRows().map(row=>row.getAttribute('data-id') || '').filter(Boolean);
         const targetIds = applySelectedOnly ? selectedIds : visibleIds;
+        const targetIdSet = new Set(targetIds);
         if(!targetIds.length){
           alert(applySelectedOnly ? 'Select at least one saved card to apply price rules.' : 'No saved cards are available to apply price rules.');
           return;
@@ -3780,28 +3787,26 @@ function ptcgdm_render_builder(array $config = []){
           els.inventoryBulkPriceRules.dataset.busy = '1';
           els.inventoryBulkPriceRules.textContent = 'Applying…';
         }
-        let appliedCount = 0;
-        targetIds.forEach(cardId=>{
-          const entry = createDeckEntryFromSaved(cardId);
-          if(!entry) return;
-          applyInventoryPriceRulesToEntry(entry, rules);
-          if(upsertDeckEntry(entry)){
-            appliedCount++;
+        let updatedPrices = 0;
+        let updatedCards = 0;
+        inventoryData.forEach((entry)=>{
+          if(!entry || !entry.id) return;
+          if(!targetIdSet.has(entry.id)) return;
+          const { changedVariants } = applyInventoryPriceRulesToEntry(entry, rules);
+          if(changedVariants > 0){
+            updatedPrices += changedVariants;
+            updatedCards += 1;
           }
         });
         if(els.inventoryBulkPriceRules){
           els.inventoryBulkPriceRules.dataset.busy = '';
           els.inventoryBulkPriceRules.textContent = els.inventoryBulkPriceRules.dataset.defaultLabel || 'Bulk Price Rules';
         }
-        if(appliedCount > 0){
-          maybeAlertInventoryBufferLimit();
-          renderDeckTable();
+        if(updatedPrices > 0){
+          renderInventoryDataTable();
           updateJSON();
-          const label = appliedCount === 1 ? 'card' : 'cards';
-          alert(`Applied price rules to ${appliedCount} ${label} in the buffer.`);
-        }else{
-          alert('No cards were added to the buffer.');
         }
+        alert(`Updated ${updatedPrices} prices across ${updatedCards} cards.`);
       }
 
       async function handleInventoryBulkDelete(event){
