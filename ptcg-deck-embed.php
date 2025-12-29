@@ -2465,6 +2465,10 @@ function ptcgdm_render_builder(array $config = []){
             errors.push(`Line ${idx+1}: Unknown set code “${parsed.setCodeDisplay}”.`);
             return;
           }
+          if(IS_ONE_PIECE && isOnePiecePromotionSet(setId)){
+            errors.push(`Line ${idx+1}: One Piece Promotion Cards cannot be added by code.`);
+            return;
+          }
           const cardId = findCardIdBySetAndNumber(setId, parsed.number);
           if(!cardId){
             const cardLookupError = `Card ${parsed.setCodeDisplay} ${parsed.numberDisplay} not found.`;
@@ -2856,6 +2860,15 @@ function ptcgdm_render_builder(array $config = []){
           if(setCodeLookup.has(upperVariant)) return setCodeLookup.get(upperVariant);
         }
         return '';
+      }
+
+      function isOnePiecePromotionSet(setId){
+        if(!setId || !IS_ONE_PIECE) return false;
+        const normalized = String(setId).trim().toLowerCase();
+        if(normalized === 'promotions') return true;
+        const label = SET_LABELS[normalized] || setMetadataCache.get(normalized)?.name || '';
+        if(!label) return false;
+        return /one piece promotion cards/i.test(String(label));
       }
 
       function findCardIdBySetAndNumber(setId, number){
