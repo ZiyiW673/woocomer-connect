@@ -1991,6 +1991,9 @@ function ptcgdm_render_builder(array $config = []){
         const originalId = String(setId || '').trim();
         if(!originalId) return 0;
         const canonicalId = originalId.toLowerCase();
+        if(IS_ONE_PIECE && canonicalId === 'promotions'){
+          return 0;
+        }
         const idVariants = Array.from(new Set([
           canonicalId,
           originalId,
