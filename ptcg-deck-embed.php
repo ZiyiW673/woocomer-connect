@@ -8927,9 +8927,17 @@ function ptcgdm_ensure_product_category_path(array $names) {
   return $term_ids;
 }
 
-function ptcgdm_assign_product_categories($product, array $card_data, array $card_preview = []) {
+function ptcgdm_assign_product_categories($product, array $card_data, array $card_preview = [], $dataset_key = '') {
   if (!($product instanceof WC_Product)) {
     return;
+  }
+
+  $normalized_dataset = strtolower(trim((string) $dataset_key));
+  $game_label = '';
+  if ($normalized_dataset === 'one_piece') {
+    $game_label = 'One Piece TCG';
+  } else {
+    $game_label = 'Pokemon TCG';
   }
 
   $supertype = '';
@@ -8946,6 +8954,9 @@ function ptcgdm_assign_product_categories($product, array $card_data, array $car
   $normalized_supertype = strtolower($normalized_supertype);
 
   $paths = [];
+  if ($game_label !== '') {
+    $paths[] = [$game_label];
+  }
   $root_path = ['Pokemon TCG Playable Singles'];
 
   if ($normalized_supertype === 'pokemon') {
@@ -9336,7 +9347,7 @@ function ptcgdm_sync_inventory_products(array $entries, array $context = []) {
         $product->set_description($description);
       }
 
-      ptcgdm_assign_product_categories($product, is_array($card_data) ? $card_data : [], is_array($card_preview) ? $card_preview : []);
+      ptcgdm_assign_product_categories($product, is_array($card_data) ? $card_data : [], is_array($card_preview) ? $card_preview : [], $dataset_key);
 
       if (!$product->get_id()) {
         $product->save();
