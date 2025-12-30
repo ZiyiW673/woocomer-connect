@@ -5412,7 +5412,11 @@ function ptcgdm_render_builder(array $config = []){
         applyDeckData(data, { updateInventory: true });
         if (IS_INVENTORY && pendingResult?.applied) {
           try {
-            await saveMergedEncryptedInventorySnapshot(masterKey, data);
+            const saveKey = await getMasterKeyFromBridge(['encrypt', 'decrypt']);
+            if (!saveKey) {
+              throw new Error('Unable to save encrypted inventory: missing encryption key.');
+            }
+            await saveMergedEncryptedInventorySnapshot(saveKey, data);
             await clearPendingInventoryAdjustments();
           } catch (err) {
             const message = err && err.message ? err.message : 'Failed to save encrypted inventory after applying adjustments.';
