@@ -5365,7 +5365,8 @@ function ptcgdm_render_builder(array $config = []){
             detail = '';
           }
           const suffix = detail ? ` (${detail.trim()})` : '';
-          throw new Error(`Failed to save encrypted inventory.${suffix}`);
+          const status = res.status ? `HTTP ${res.status}` : 'HTTP error';
+          throw new Error(`Failed to save encrypted inventory (${status}).${suffix}`);
         }
         return true;
       }
@@ -5414,7 +5415,9 @@ function ptcgdm_render_builder(array $config = []){
             await saveMergedEncryptedInventorySnapshot(masterKey, data);
             await clearPendingInventoryAdjustments();
           } catch (err) {
-            console.error('Failed to save encrypted inventory after applying adjustments.', err);
+            const message = err && err.message ? err.message : 'Failed to save encrypted inventory after applying adjustments.';
+            setLoadStatus(message, true);
+            console.error(message, err);
           }
         }
         setLoadStatus(loadMessage);
