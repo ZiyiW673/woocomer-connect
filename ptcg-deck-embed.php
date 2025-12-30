@@ -5169,6 +5169,117 @@ function ptcgdm_render_builder(array $config = []){
         const helperStatus = helper && typeof helper.status === 'string' ? helper.status : '';
         return (meta && meta.status === 'encrypted_v1') || helperStatus === 'encrypted_v1' || helperStatus === 'encrypted_v1_locked';
       }
+      async function fetchPendingInventoryAdjustments(){
+        if (!IS_INVENTORY) return [];
+        try {
+          const res = await fetch(`${API_BASE}/pending-inventory-adjustments?dataset=${encodeURIComponent(DATASET_KEY)}`, {
+            credentials: 'include',
+            headers: withRestNonce(),
+          });
+          if (!res.ok) {
+            return [];
+          }
+          const data = await res.json();
+          return Array.isArray(data?.adjustments) ? data.adjustments : [];
+        } catch (err) {
+          console.error('Failed to fetch pending inventory adjustments.', err);
+          return [];
+        }
+      }
+      async function clearPendingInventoryAdjustments(){
+        if (!IS_INVENTORY) return false;
+        const res = await fetch(`${API_BASE}/pending-inventory-adjustments`, {
+          method: 'POST',
+          credentials: 'include',
+          headers: withRestNonce({ 'Content-Type': 'application/json' }),
+          body: JSON.stringify({ dataset: DATASET_KEY, clear: true }),
+        });
+        if (!res.ok) {
+          let detail = '';
+          try {
+            detail = await res.text();
+          } catch (err) {
+            detail = '';
+          }
+          const suffix = detail ? ` (${detail.trim()})` : '';
+          throw new Error(`Failed to clear pending adjustments.${suffix}`);
+        }
+        return true;
+      }
+      function applyPendingInventoryAdjustments(data, adjustments){
+        if (!IS_INVENTORY || !data || typeof data !== 'object') {
+          return { data, applied: false, count: 0 };
+        }
+        if (!Array.isArray(adjustments) || adjustments.length === 0) {
+          return { data, applied: false, count: 0 };
+        }
+        const cards = Array.isArray(data.cards) ? data.cards.slice() : [];
+        const indexMap = new Map();
+        cards.forEach((card, idx) => {
+          if (card && card.id) {
+            const id = String(card.id).trim();
+            if (id) indexMap.set(id, idx);
+          }
+        });
+        const latestById = new Map();
+        adjustments.forEach((adjustment) => {
+          if (!adjustment || typeof adjustment !== 'object') return;
+          const id = adjustment.id !== undefined ? String(adjustment.id).trim() : '';
+          if (!id) return;
+          const tsRaw = adjustment.timestamp;
+          const timestamp = Number.isFinite(tsRaw) ? tsRaw : parseInt(tsRaw, 10) || 0;
+          const existing = latestById.get(id);
+          if (!existing || timestamp >= existing.timestamp) {
+            latestById.set(id, { ...adjustment, id, timestamp });
+          }
+        });
+        if (!latestById.size) {
+          return { data, applied: false, count: 0 };
+        }
+        let changed = false;
+        latestById.forEach((adjustment) => {
+          const variants = adjustment.variants && typeof adjustment.variants === 'object' ? adjustment.variants : {};
+          const entryVariants = {};
+          let computedTotal = 0;
+          const variantKeys = new Set(INVENTORY_VARIANTS.map(({ key }) => key));
+          Object.keys(variants).forEach((key) => variantKeys.add(key));
+          variantKeys.forEach((key) => {
+            const qtyRaw = variants[key];
+            const qty = Number.isFinite(qtyRaw) ? qtyRaw : parseInt(qtyRaw, 10) || 0;
+            if (qty > 0) {
+              entryVariants[key] = { qty };
+              computedTotal += qty;
+            }
+          });
+          let totalQty = Number.isFinite(adjustment.qty) ? adjustment.qty : parseInt(adjustment.qty, 10);
+          if (!Number.isFinite(totalQty)) totalQty = 0;
+          if (totalQty > 0 && computedTotal === 0) {
+            entryVariants.normal = { qty: totalQty };
+            computedTotal = totalQty;
+          }
+          const index = indexMap.get(adjustment.id);
+          if (computedTotal > 0 || Object.keys(entryVariants).length) {
+            const entry = { id: adjustment.id, variants: entryVariants };
+            if (computedTotal > 0) {
+              entry.qty = computedTotal;
+            }
+            if (index === undefined) {
+              indexMap.set(adjustment.id, cards.length);
+              cards.push(entry);
+            } else {
+              cards[index] = entry;
+            }
+            changed = true;
+          } else if (index !== undefined) {
+            cards[index] = null;
+            changed = true;
+          }
+        });
+        if (changed) {
+          data.cards = cards.filter(Boolean);
+        }
+        return { data, applied: changed, count: latestById.size };
+      }
       async function saveEncryptedInventorySnapshot(){
         const entriesForSave = updateJSON();
         const plaintextContent = deckJsonCache;
@@ -5228,9 +5339,23 @@ function ptcgdm_render_builder(array $config = []){
         }
         const plaintext = await decryptBlobWithKey(masterKey, payload.blob);
         const text = new TextDecoder().decode(plaintext);
-        const data = text ? JSON.parse(text) : {};
+        let data = text ? JSON.parse(text) : {};
+        let loadMessage = 'Loaded saved inventory.';
+        if (IS_INVENTORY) {
+          const adjustments = await fetchPendingInventoryAdjustments();
+          const result = applyPendingInventoryAdjustments(data, adjustments);
+          if (result.applied) {
+            data = result.data;
+            loadMessage = `Loaded saved inventory. Applied ${result.count} pending adjustment${result.count === 1 ? '' : 's'}.`;
+            try {
+              await clearPendingInventoryAdjustments();
+            } catch (err) {
+              console.error('Failed to clear pending adjustments.', err);
+            }
+          }
+        }
         applyDeckData(data, { updateInventory: true });
-        setLoadStatus('Loaded saved inventory.');
+        setLoadStatus(loadMessage);
         encryptedInventoryLoaded = true;
         return true;
       }
@@ -9897,6 +10022,72 @@ function ptcgdm_update_inventory_card_quantity($card_id, $quantity, ?array $vari
   return file_put_contents($path, $encoded) !== false;
 }
 
+function ptcgdm_get_pending_inventory_adjustments_path($dataset_key = '') {
+  $dir = trailingslashit(ptcgdm_get_inventory_dir());
+  $slug = ptcgdm_slugify_inventory_dataset_key($dataset_key);
+  return $dir . sprintf('pending-inventory-adjustments-%s.json', $slug);
+}
+
+function ptcgdm_load_pending_inventory_adjustments($dataset_key = '') {
+  $path = ptcgdm_get_pending_inventory_adjustments_path($dataset_key);
+  if (!file_exists($path) || !is_readable($path)) {
+    return [];
+  }
+
+  $raw = @file_get_contents($path);
+  if ($raw === false || $raw === '') {
+    return [];
+  }
+
+  $decoded = json_decode($raw, true);
+  if (!is_array($decoded)) {
+    return [];
+  }
+
+  $adjustments = [];
+  foreach ($decoded as $entry) {
+    if (!is_array($entry)) {
+      continue;
+    }
+    $id = isset($entry['id']) ? trim((string) $entry['id']) : '';
+    if ($id === '') {
+      continue;
+    }
+    $adjustments[] = $entry;
+  }
+
+  return $adjustments;
+}
+
+function ptcgdm_save_pending_inventory_adjustments($dataset_key = '', array $adjustments = []) {
+  $dir = ptcgdm_get_inventory_dir();
+  if (!file_exists($dir) && !wp_mkdir_p($dir)) {
+    return false;
+  }
+
+  $path = ptcgdm_get_pending_inventory_adjustments_path($dataset_key);
+  $encoded = wp_json_encode(array_values($adjustments), JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
+  if (!is_string($encoded)) {
+    return false;
+  }
+
+  return file_put_contents($path, $encoded, LOCK_EX) !== false;
+}
+
+function ptcgdm_append_pending_inventory_adjustment($dataset_key = '', array $adjustment = []) {
+  $current = ptcgdm_load_pending_inventory_adjustments($dataset_key);
+  $current[] = $adjustment;
+  return ptcgdm_save_pending_inventory_adjustments($dataset_key, $current);
+}
+
+function ptcgdm_clear_pending_inventory_adjustments($dataset_key = '') {
+  $path = ptcgdm_get_pending_inventory_adjustments_path($dataset_key);
+  if (file_exists($path)) {
+    return @unlink($path);
+  }
+  return true;
+}
+
 
 function ptcgdm_handle_inventory_stock_change($product) {
   if (!($product instanceof WC_Product)) {
@@ -9933,6 +10124,14 @@ function ptcgdm_handle_inventory_stock_change($product) {
   }
   if ($card_id === '') {
     return;
+  }
+
+  $dataset_key = ptcgdm_normalize_inventory_dataset_key($parent_product->get_meta('_ptcgdm_dataset'));
+  if ($dataset_key === '') {
+    $dataset_key = ptcgdm_detect_dataset_from_card_id($card_id);
+  }
+  if ($dataset_key === '') {
+    $dataset_key = ptcgdm_get_active_inventory_dataset();
   }
 
   $total_quantity = 0;
@@ -9993,7 +10192,52 @@ function ptcgdm_handle_inventory_stock_change($product) {
     $total_quantity = max(0, (int) $quantity);
   }
 
-  ptcgdm_update_inventory_card_quantity($card_id, $total_quantity, $variant_quantities);
+  $meta = ptcgdm_get_encryption_meta();
+  $encrypted_active = ($meta['status'] ?? 'unencrypted') === 'encrypted_v1';
+
+  if ($encrypted_active) {
+    $encrypted_path = ptcgdm_find_existing_encrypted_inventory_path($dataset_key);
+    if (!$encrypted_path || !file_exists($encrypted_path)) {
+      error_log(sprintf('[PTCGDM][Inventory] Encrypted inventory file missing for %s (%s). Recording pending adjustment anyway.', $card_id, $dataset_key));
+    }
+    $normalized_variants = [];
+    if (is_array($variant_quantities)) {
+      foreach ($variant_quantities as $key => $value) {
+        $normalized_key = is_string($key) ? trim($key) : '';
+        if ($normalized_key === '') {
+          continue;
+        }
+        if (!array_key_exists($normalized_key, ptcgdm_get_inventory_variant_labels())) {
+          $normalized_key = ptcgdm_inventory_variant_key_from_label($normalized_key);
+        }
+        if ($normalized_key === '' || !array_key_exists($normalized_key, ptcgdm_get_inventory_variant_labels())) {
+          continue;
+        }
+        $normalized_variants[$normalized_key] = max(0, ptcgdm_normalize_inventory_quantity($value));
+      }
+    }
+    if (!$normalized_variants) {
+      $normalized_variants['normal'] = max(0, (int) $total_quantity);
+    }
+
+    $adjustment = [
+      'id'        => $card_id,
+      'qty'       => max(0, (int) $total_quantity),
+      'variants'  => $normalized_variants,
+      'timestamp' => time(),
+    ];
+
+    $saved = ptcgdm_append_pending_inventory_adjustment($dataset_key, $adjustment);
+    if (!$saved) {
+      error_log(sprintf('[PTCGDM][Inventory] Failed to record encrypted inventory adjustment for %s (%s).', $card_id, $dataset_key));
+    }
+    return;
+  }
+
+  $updated = ptcgdm_update_inventory_card_quantity($card_id, $total_quantity, $variant_quantities, $dataset_key);
+  if (!$updated) {
+    error_log(sprintf('[PTCGDM][Inventory] Failed to update plaintext inventory for %s (%s).', $card_id, $dataset_key));
+  }
 }
 
 if (function_exists('add_action')) {
@@ -10562,6 +10806,50 @@ function ptcgdm_register_encryption_routes() {
       return [
         'dataset' => $dataset,
         'data'    => $contents,
+      ];
+    },
+    'permission_callback' => function () {
+      return ptcgdm_admin_ui_is_authorized();
+    },
+  ]);
+
+  register_rest_route('ptcgdm/v1', '/pending-inventory-adjustments', [
+    'methods'  => WP_REST_Server::READABLE,
+    'callback' => function (WP_REST_Request $request) {
+      $dataset = ptcgdm_normalize_inventory_dataset_key($request->get_param('dataset'));
+      $adjustments = ptcgdm_load_pending_inventory_adjustments($dataset);
+      return [
+        'dataset' => $dataset,
+        'adjustments' => $adjustments,
+      ];
+    },
+    'permission_callback' => function () {
+      return ptcgdm_admin_ui_is_authorized();
+    },
+  ]);
+
+  register_rest_route('ptcgdm/v1', '/pending-inventory-adjustments', [
+    'methods'  => WP_REST_Server::EDITABLE,
+    'callback' => function (WP_REST_Request $request) {
+      $body = json_decode($request->get_body(), true);
+      if (!is_array($body)) {
+        return new WP_Error('invalid_body', 'Invalid payload.', ['status' => 400]);
+      }
+
+      $dataset = ptcgdm_normalize_inventory_dataset_key($body['dataset'] ?? '');
+      $clear = !empty($body['clear']);
+      if (!$clear) {
+        return new WP_Error('invalid_request', 'Missing clear flag.', ['status' => 400]);
+      }
+
+      $cleared = ptcgdm_clear_pending_inventory_adjustments($dataset);
+      if (!$cleared) {
+        return new WP_Error('clear_failed', 'Unable to clear pending adjustments.', ['status' => 500]);
+      }
+
+      return [
+        'dataset' => $dataset,
+        'cleared' => true,
       ];
     },
     'permission_callback' => function () {
