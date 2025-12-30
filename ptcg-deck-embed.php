@@ -10193,10 +10193,13 @@ function ptcgdm_handle_inventory_stock_change($product) {
   }
 
   $meta = ptcgdm_get_encryption_meta();
-  $encrypted_path = ptcgdm_find_existing_encrypted_inventory_path($dataset_key);
-  $encrypted_active = ($meta['status'] ?? 'unencrypted') === 'encrypted_v1' && $encrypted_path && file_exists($encrypted_path);
+  $encrypted_active = ($meta['status'] ?? 'unencrypted') === 'encrypted_v1';
 
   if ($encrypted_active) {
+    $encrypted_path = ptcgdm_find_existing_encrypted_inventory_path($dataset_key);
+    if (!$encrypted_path || !file_exists($encrypted_path)) {
+      error_log(sprintf('[PTCGDM][Inventory] Encrypted inventory file missing for %s (%s). Recording pending adjustment anyway.', $card_id, $dataset_key));
+    }
     $normalized_variants = [];
     if (is_array($variant_quantities)) {
       foreach ($variant_quantities as $key => $value) {
