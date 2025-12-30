@@ -5344,10 +5344,11 @@ function ptcgdm_render_builder(array $config = []){
       }
       async function saveMergedEncryptedInventorySnapshot(masterKey, data){
         if (!IS_INVENTORY || !masterKey) return false;
-        const plaintextContent = JSON.stringify(data || {});
+        const entriesForSave = updateJSON();
+        const plaintextContent = deckJsonCache || JSON.stringify(data || {});
         const encryptedMeta = {
           content_length: plaintextContent.length,
-          card_count: Array.isArray(data?.cards) ? data.cards.length : 0,
+          card_count: Array.isArray(entriesForSave) ? entriesForSave.length : 0,
           dataset: DATASET_KEY,
         };
         const encryptedBlob = await encryptBlobWithKey(masterKey, new TextEncoder().encode(plaintextContent));
