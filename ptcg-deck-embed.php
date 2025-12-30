@@ -911,6 +911,10 @@ function ptcgdm_render_builder(array $config = []){
       .bulk-status{font-size:13px}
       .bulk-status.error{color:#f28b82}
       .btn.danger{background:linear-gradient(180deg,#ff4d4f,#d9363e)}
+      .bulk-price-rules-panel{display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;margin:8px 0 12px}
+      .bulk-price-rules-panel .rule-field{flex:1 1 180px;min-width:160px}
+      .bulk-price-rules-panel .rule-toggle{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--muted)}
+      .bulk-price-rules-panel .rule-toggle input{width:auto;margin:0}
       .table-scroll{max-height:420px;overflow:auto;border:1px solid var(--line);border-radius:12px;margin:-4px 0 8px;padding:4px}
       .inventory-actions{display:flex;gap:8px;align-items:center;flex-wrap:nowrap}
       .special-pattern-cell{min-width:260px}
@@ -1082,8 +1086,23 @@ function ptcgdm_render_builder(array $config = []){
         <div class="muted" style="font-size:12px">Selected: <span id="inventorySelectedCount">0</span></div>
         <div class="inventory-actions" style="flex-wrap:wrap;gap:8px">
           <button id="inventoryBulkChangePrice" class="btn secondary" disabled>Bulk Change Price</button>
+          <button id="inventoryBulkPriceRules" class="btn secondary" disabled>Bulk Price Rules</button>
           <button id="inventoryBulkDelete" class="btn danger" disabled>Bulk Delete</button>
         </div>
+      </div>
+      <div class="bulk-price-rules-panel">
+        <div class="rule-field">
+          <label for="inventoryPriceRuleFloor">Minimum price floor</label>
+          <input id="inventoryPriceRuleFloor" type="number" min="0" step="0.01" value="0.25">
+        </div>
+        <div class="rule-field">
+          <label for="inventoryPriceRuleRounding">Optional rounding</label>
+          <input id="inventoryPriceRuleRounding" type="number" min="0" step="0.01" placeholder="e.g., 0.01 or 0.05">
+        </div>
+        <label class="rule-toggle" for="inventoryPriceRuleSelectedOnly">
+          <input id="inventoryPriceRuleSelectedOnly" type="checkbox">
+          Apply to selected only
+        </label>
       </div>
       <div class="table-scroll">
         <table id="inventoryDataTable">
@@ -1317,8 +1336,12 @@ function ptcgdm_render_builder(array $config = []){
         inventoryFilterStatus: document.getElementById('inventoryFilterStatus'),
         inventoryBulkSelectAll: document.getElementById('inventoryBulkSelectAll'),
         inventoryBulkChangePrice: document.getElementById('inventoryBulkChangePrice'),
+        inventoryBulkPriceRules: document.getElementById('inventoryBulkPriceRules'),
         inventoryBulkDelete: document.getElementById('inventoryBulkDelete'),
         inventorySelectedCount: document.getElementById('inventorySelectedCount'),
+        inventoryPriceRuleFloor: document.getElementById('inventoryPriceRuleFloor'),
+        inventoryPriceRuleRounding: document.getElementById('inventoryPriceRuleRounding'),
+        inventoryPriceRuleSelectedOnly: document.getElementById('inventoryPriceRuleSelectedOnly'),
         saveProgress: document.getElementById('saveProgress'),
         saveProgressText: document.getElementById('saveProgressText'),
         syncProgress: document.getElementById('syncProgress'),
@@ -1385,6 +1408,9 @@ function ptcgdm_render_builder(array $config = []){
       }
       if (els.inventoryBulkChangePrice) {
         els.inventoryBulkChangePrice.dataset.defaultLabel = els.inventoryBulkChangePrice.textContent || '';
+      }
+      if (els.inventoryBulkPriceRules) {
+        els.inventoryBulkPriceRules.dataset.defaultLabel = els.inventoryBulkPriceRules.textContent || '';
       }
       if (els.inventoryBulkDelete) {
         els.inventoryBulkDelete.dataset.defaultLabel = els.inventoryBulkDelete.textContent || '';
@@ -1866,6 +1892,9 @@ function ptcgdm_render_builder(array $config = []){
         if (IS_INVENTORY && els.inventoryBulkChangePrice) {
           els.inventoryBulkChangePrice.addEventListener('click', handleInventoryBulkChangePrice);
         }
+        if (IS_INVENTORY && els.inventoryBulkPriceRules) {
+          els.inventoryBulkPriceRules.addEventListener('click', handleInventoryBulkPriceRules);
+        }
         if (IS_INVENTORY && els.inventoryBulkDelete) {
           els.inventoryBulkDelete.addEventListener('click', handleInventoryBulkDelete);
         }
@@ -1896,6 +1925,9 @@ function ptcgdm_render_builder(array $config = []){
           els.inventoryFilterName.addEventListener('input', ()=>{
             renderInventoryDataTable();
           });
+        }
+        if (IS_INVENTORY && els.inventoryPriceRuleSelectedOnly) {
+          els.inventoryPriceRuleSelectedOnly.addEventListener('change', updateInventoryBulkControls);
         }
         if (els.savedDeckSelect) {
           els.savedDeckSelect.addEventListener('change', ()=>updateLoadDeckButton(true));
@@ -1959,6 +1991,9 @@ function ptcgdm_render_builder(array $config = []){
         const originalId = String(setId || '').trim();
         if(!originalId) return 0;
         const canonicalId = originalId.toLowerCase();
+        if(IS_ONE_PIECE && canonicalId === 'promotions'){
+          return 0;
+        }
         const idVariants = Array.from(new Set([
           canonicalId,
           originalId,
@@ -2354,11 +2389,21 @@ function ptcgdm_render_builder(array $config = []){
 
       function getCardSetLabel(card){
         const name = (card?.set?.name || '').trim();
-        if(name) return name;
         const setId = String(card?.set?.id || '').trim().toLowerCase();
         if(setId && SET_LABELS[setId]){
-          return SET_LABELS[setId];
+          if(!name){
+            return SET_LABELS[setId];
+          }
+          if(DATASET_KEY === 'one_piece'){
+            const normalizedName = name.replace(/\s+/g, '').toLowerCase();
+            const normalizedId = setId.replace(/\s+/g, '').toLowerCase();
+            const looksLikeCode = /^(op|eb|st|prb)\d+$/i.test(normalizedName) || /^op-?\d+$/i.test(name);
+            if(looksLikeCode || normalizedName === normalizedId){
+              return SET_LABELS[setId];
+            }
+          }
         }
+        if(name) return name;
         return 'Unknown Set';
       }
 
@@ -2431,6 +2476,10 @@ function ptcgdm_render_builder(array $config = []){
           const setId = resolveSetIdFromCode(parsed.setCode);
           if(!setId){
             errors.push(`Line ${idx+1}: Unknown set code “${parsed.setCodeDisplay}”.`);
+            return;
+          }
+          if(IS_ONE_PIECE && isOnePiecePromotionSet(setId)){
+            errors.push(`Line ${idx+1}: One Piece Promotion Cards cannot be added by code.`);
             return;
           }
           const cardId = findCardIdBySetAndNumber(setId, parsed.number);
@@ -2824,6 +2873,15 @@ function ptcgdm_render_builder(array $config = []){
           if(setCodeLookup.has(upperVariant)) return setCodeLookup.get(upperVariant);
         }
         return '';
+      }
+
+      function isOnePiecePromotionSet(setId){
+        if(!setId || !IS_ONE_PIECE) return false;
+        const normalized = String(setId).trim().toLowerCase();
+        if(normalized === 'promotions') return true;
+        const label = SET_LABELS[normalized] || setMetadataCache.get(normalized)?.name || '';
+        if(!label) return false;
+        return /one piece promotion cards/i.test(String(label));
       }
 
       function findCardIdBySetAndNumber(setId, number){
@@ -3351,6 +3409,18 @@ function ptcgdm_render_builder(array $config = []){
           const busy = els.inventoryBulkChangePrice.dataset.busy === '1';
           els.inventoryBulkChangePrice.disabled = busy || selectedCount === 0;
         }
+        if(els.inventoryBulkPriceRules){
+          const busy = els.inventoryBulkPriceRules.dataset.busy === '1';
+          const applySelectedOnly = !!els.inventoryPriceRuleSelectedOnly?.checked;
+          const hasTargets = applySelectedOnly ? selectedCount > 0 : rows.length > 0;
+          const locked = isInventoryLocked();
+          els.inventoryBulkPriceRules.disabled = busy || locked || !hasTargets;
+          if(locked){
+            els.inventoryBulkPriceRules.title = 'Unlock in the Security tab to apply price rules.';
+          }else{
+            els.inventoryBulkPriceRules.removeAttribute('title');
+          }
+        }
         if(els.inventoryBulkDelete){
           const busy = els.inventoryBulkDelete.dataset.busy === '1';
           els.inventoryBulkDelete.disabled = busy || selectedCount === 0;
@@ -3425,6 +3495,50 @@ function ptcgdm_render_builder(array $config = []){
           }
         }
         return true;
+      }
+
+      function getInventoryBulkPriceRuleValues(){
+        let floor = parsePriceValue(els.inventoryPriceRuleFloor?.value);
+        if(!Number.isFinite(floor) || floor < 0){
+          floor = 0.25;
+          if(els.inventoryPriceRuleFloor){
+            els.inventoryPriceRuleFloor.value = floor.toFixed(2);
+          }
+        }
+        let rounding = parsePriceValue(els.inventoryPriceRuleRounding?.value);
+        if(!Number.isFinite(rounding) || rounding <= 0){
+          rounding = null;
+        }
+        const applySelectedOnly = !!els.inventoryPriceRuleSelectedOnly?.checked;
+        return { floor, rounding, applySelectedOnly };
+      }
+
+      function applyInventoryPriceRulesToEntry(entry, rules){
+        if(!entry || !entry.variants || typeof entry.variants !== 'object') return { changedVariants: 0 };
+        let changedVariants = 0;
+        Object.keys(entry.variants).forEach((key)=>{
+          const variant = entry.variants[key];
+          if(!variant || typeof variant !== 'object') return;
+          const currentPrice = parsePriceInput(variant.price);
+          if(!Number.isFinite(currentPrice)) return;
+          let nextPrice = currentPrice;
+          const floor = Number.isFinite(rules.floor) ? rules.floor : 0;
+          if(nextPrice < floor){
+            nextPrice = floor;
+          }
+          if(Number.isFinite(rules.rounding) && rules.rounding > 0){
+            nextPrice = Math.round(nextPrice / rules.rounding) * rules.rounding;
+          }
+          if(nextPrice < floor){
+            nextPrice = floor;
+          }
+          nextPrice = Math.round(nextPrice * 100) / 100;
+          if(nextPrice !== currentPrice){
+            variant.price = nextPrice;
+            changedVariants += 1;
+          }
+        });
+        return { changedVariants };
       }
 
       function removeInventoryEntryLocal(cardId){
@@ -3651,6 +3765,73 @@ function ptcgdm_render_builder(array $config = []){
         }
         inventoryBulkSelection.clear();
         syncInventorySelectionsWithRows();
+      }
+
+      async function handleInventoryBulkPriceRules(event){
+        event.preventDefault();
+        if(!IS_INVENTORY) return;
+        if(isInventoryLocked()){
+          alert('Inventory is encrypted. Please unlock it in the Security tab before applying price rules.');
+          return;
+        }
+        const rules = getInventoryBulkPriceRuleValues();
+        const applySelectedOnly = rules.applySelectedOnly;
+        const selectedIds = Array.from(inventoryBulkSelection);
+        const visibleIds = getVisibleInventoryRows().map(row=>row.getAttribute('data-id') || '').filter(Boolean);
+        const targetIds = applySelectedOnly ? selectedIds : visibleIds;
+        const targetIdSet = new Set(targetIds);
+        if(!targetIds.length){
+          alert(applySelectedOnly ? 'Select at least one saved card to apply price rules.' : 'No saved cards are available to apply price rules.');
+          return;
+        }
+        const roundingLabel = Number.isFinite(rules.rounding) ? `$${formatPriceDisplay(rules.rounding)}` : 'None';
+        const scopeLabel = applySelectedOnly ? 'Selected cards only' : 'All visible cards';
+        const confirmationLines = [
+          `Apply bulk price rules to ${targetIds.length} ${targetIds.length === 1 ? 'card' : 'cards'}:`,
+          `• Minimum price floor: $${formatPriceDisplay(rules.floor)}`,
+          `• Rounding: ${roundingLabel}`,
+          `• Scope: ${scopeLabel}`,
+          '',
+          'Proceed?'
+        ];
+        if(!window.confirm(confirmationLines.join('\n'))){
+          return;
+        }
+        if(els.inventoryBulkPriceRules){
+          els.inventoryBulkPriceRules.dataset.busy = '1';
+          els.inventoryBulkPriceRules.textContent = 'Applying…';
+        }
+        const encryptedMode = await isEncryptedInventoryMode();
+        let updatedPrices = 0;
+        let updatedCards = 0;
+        inventoryData.forEach((entry)=>{
+          if(!entry || !entry.id) return;
+          if(!targetIdSet.has(entry.id)) return;
+          const { changedVariants } = applyInventoryPriceRulesToEntry(entry, rules);
+          if(changedVariants > 0){
+            updatedPrices += changedVariants;
+            updatedCards += 1;
+          }
+        });
+        if(els.inventoryBulkPriceRules){
+          els.inventoryBulkPriceRules.dataset.busy = '';
+          els.inventoryBulkPriceRules.textContent = els.inventoryBulkPriceRules.dataset.defaultLabel || 'Bulk Price Rules';
+        }
+        if(updatedPrices > 0){
+          renderInventoryDataTable();
+          updateJSON();
+          if(encryptedMode){
+            try {
+              await saveEncryptedInventorySnapshot();
+            } catch (err) {
+              const message = err && err.message ? err.message : err;
+              alert(`Failed to save encrypted inventory: ${message}`);
+              renderInventoryDataTable();
+              updateJSON();
+            }
+          }
+        }
+        alert(`Updated ${updatedPrices} prices across ${updatedCards} cards.`);
       }
 
       async function handleInventoryBulkDelete(event){
@@ -8772,9 +8953,17 @@ function ptcgdm_ensure_product_category_path(array $names) {
   return $term_ids;
 }
 
-function ptcgdm_assign_product_categories($product, array $card_data, array $card_preview = []) {
+function ptcgdm_assign_product_categories($product, array $card_data, array $card_preview = [], $dataset_key = '') {
   if (!($product instanceof WC_Product)) {
     return;
+  }
+
+  $normalized_dataset = strtolower(trim((string) $dataset_key));
+  $game_label = '';
+  if ($normalized_dataset === 'one_piece') {
+    $game_label = 'One Piece TCG';
+  } else {
+    $game_label = 'Pokemon TCG';
   }
 
   $supertype = '';
@@ -8791,6 +8980,9 @@ function ptcgdm_assign_product_categories($product, array $card_data, array $car
   $normalized_supertype = strtolower($normalized_supertype);
 
   $paths = [];
+  if ($game_label !== '') {
+    $paths[] = [$game_label];
+  }
   $root_path = ['Pokemon TCG Playable Singles'];
 
   if ($normalized_supertype === 'pokemon') {
@@ -9181,7 +9373,7 @@ function ptcgdm_sync_inventory_products(array $entries, array $context = []) {
         $product->set_description($description);
       }
 
-      ptcgdm_assign_product_categories($product, is_array($card_data) ? $card_data : [], is_array($card_preview) ? $card_preview : []);
+      ptcgdm_assign_product_categories($product, is_array($card_data) ? $card_data : [], is_array($card_preview) ? $card_preview : [], $dataset_key);
 
       if (!$product->get_id()) {
         $product->save();
