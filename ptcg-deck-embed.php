@@ -1424,6 +1424,8 @@ function ptcgdm_render_builder(array $config = []){
       const MANUAL_SYNC_MAX_POLL_MS = 3 * 60 * 1000; // 3 minutes
       let manualSyncPollStartedAt = 0;
       let manualSyncRunIdMismatchCount = 0;
+      let manualSyncRetryCount = 0;
+      const MANUAL_SYNC_MAX_RETRIES = 3;
       const MANUAL_SYNC_MAX_RUNID_MISMATCH = 6;
       let deckNameState = typeof SAVE_CONFIG.defaultEntryName === 'string' ? SAVE_CONFIG.defaultEntryName : '';
       let deckFormatState = typeof SAVE_CONFIG.defaultFormat === 'string' ? SAVE_CONFIG.defaultFormat : '';
@@ -2046,6 +2048,10 @@ function ptcgdm_render_builder(array $config = []){
                 }
               }
               applyDatasetSpecificCardAdjustments(c);
+              const existing = byId.get(c.id);
+              if(existing && shouldSkipDuplicateCard(existing, c)){
+                continue;
+              }
               registerCardNumberIndex(canonicalId, c);
               registerCardNameIndex(canonicalId, c);
               byId.set(c.id,c);
@@ -2128,11 +2134,10 @@ function ptcgdm_render_builder(array $config = []){
         const canonicalId = String(resolvedId || '').trim().toLowerCase();
         if (canonicalId) {
           merged.id = canonicalId;
-          if (!merged.name) {
-            const label = SET_LABELS[canonicalId];
-            if (label) {
-              merged.name = label;
-            }
+          const label = SET_LABELS[canonicalId];
+          const shouldOverrideName = IS_ONE_PIECE && label && isGenericSetName(merged.name, canonicalId);
+          if (label && (!merged.name || shouldOverrideName)) {
+            merged.name = label;
           }
         }
         if(info.images || current.images){
@@ -2254,6 +2259,36 @@ function ptcgdm_render_builder(array $config = []){
 
       function makeSetKey(id){
         return String(id || '').trim().toLowerCase();
+      }
+
+      function normaliseSetNameKey(value){
+        return String(value || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '');
+      }
+
+      function isGenericSetName(name, setId){
+        const label = String(name || '').trim();
+        if(!label) return true;
+        const normalisedName = normaliseSetNameKey(label);
+        const normalisedId = normaliseSetNameKey(setId);
+        if(!normalisedName || !normalisedId) return false;
+        return normalisedName === normalisedId;
+      }
+
+      function isOnePiecePromotionCard(card){
+        if(!IS_ONE_PIECE || !card) return false;
+        const setId = String(card?.set?.id || '').trim().toLowerCase();
+        if(setId === 'promotions') return true;
+        const setName = String(card?.set?.name || '').trim();
+        return /promotion/i.test(setName);
+      }
+
+      function shouldSkipDuplicateCard(existing, candidate){
+        if(!existing || !candidate) return false;
+        if(!IS_ONE_PIECE) return false;
+        const existingPromo = isOnePiecePromotionCard(existing);
+        const candidatePromo = isOnePiecePromotionCard(candidate);
+        if(!existingPromo && candidatePromo) return true;
+        return false;
       }
 
       function makeNameKey(name){
@@ -4556,139 +4591,162 @@ function ptcgdm_render_builder(array $config = []){
           button.dataset.saving = '1';
           button.textContent = button.dataset.savingLabel || 'Saving…';
         }
-        const rawName = getDeckNameValue();
-        const fallbackBase = SAVE_CONFIG.defaultBasename || 'deck';
-        let safeBase = (rawName || fallbackBase).replace(/[^\w-]+/g,'_');
-        if (!safeBase) safeBase = fallbackBase.replace(/[^\w-]+/g,'_') || 'deck';
-        let filename = SAVE_CONFIG.fixedFilename || '';
-        if (!filename) {
-          const pattern = SAVE_CONFIG.filenamePattern || '%s.json';
-          if (pattern.includes('%s')) {
-            filename = pattern.replace('%s', safeBase);
-          } else {
-            filename = safeBase + pattern;
-          }
-        }
-        const entriesForSave = updateJSON();
-        const plaintextContent = deckJsonCache;
-        const encryptedMeta = {
-          content_length: plaintextContent ? plaintextContent.length : 0,
-          card_count: Array.isArray(entriesForSave) ? entriesForSave.length : 0,
-          dataset: DATASET_KEY,
-        };
-        const meta = await fetchEncryptionMetaCached();
-        const parentHelper = (window.parent && window.parent !== window ? window.parent.ptcgdmInventoryCrypto : null) || window.ptcgdmInventoryCrypto || null;
-        const helperStatus = parentHelper && typeof parentHelper.status === 'string' ? parentHelper.status : '';
-        const encryptedMode = IS_INVENTORY && ((meta && meta.status === 'encrypted_v1') || helperStatus === 'encrypted_v1' || helperStatus === 'encrypted_v1_locked');
-        const body=new FormData();
-        body.append('action', SAVE_CONFIG.saveAction || 'ptcgdm_save_inventory');
-        body.append('nonce', SAVE_NONCE);
-        body.append('datasetKey', DATASET_KEY);
-        body.append('filename', filename);
-        body.append('content', plaintextContent);
-        if (SAVE_CONFIG.preferAsyncSync) {
-          body.append('preferAsyncSync', '1');
-        }
-        try{
-          let responseData = null;
-          if (encryptedMode) {
-            const masterKey = await getMasterKeyFromBridge(['encrypt','decrypt']);
-            if (!masterKey) {
-              throw new Error('Inventory is encrypted. Please unlock it in the Security tab before saving.');
-            }
-            const encryptedBlob = await encryptBlobWithKey(masterKey, new TextEncoder().encode(plaintextContent));
-            const res = await fetch(`${API_BASE}/encrypted-inventory`, {
-              method: 'POST',
-              credentials: 'include',
-              headers: withRestNonce({ 'Content-Type': 'application/json' }),
-              body: JSON.stringify({ dataset: DATASET_KEY, blob: encryptedBlob, meta: encryptedMeta }),
-            });
-            if (!res.ok) {
-              let detail = '';
-              try {
-                detail = await res.text();
-              } catch (err) {
-                detail = '';
-              }
-              const suffix = detail ? ` (${detail.trim()})` : '';
-              throw new Error(`Failed to save encrypted inventory.${suffix}`);
-            }
-            responseData = { url: SAVE_CONFIG.autoLoadUrl || '', dataset: DATASET_KEY, encrypted: true };
-            const syncInfo = await triggerEncryptedManualSync(plaintextContent);
-            if (syncInfo) {
-              responseData = Object.assign(responseData, syncInfo);
-              if (syncInfo.syncError) {
-                renderSaveProgress(syncInfo.syncError);
+        const maxSaveAttempts = 3;
+        let entriesForSave = [];
+        let lastError = '';
+        let saved = false;
+        for (let attempt = 1; attempt <= maxSaveAttempts; attempt++) {
+          try {
+            const rawName = getDeckNameValue();
+            const fallbackBase = SAVE_CONFIG.defaultBasename || 'deck';
+            let safeBase = (rawName || fallbackBase).replace(/[^\w-]+/g,'_');
+            if (!safeBase) safeBase = fallbackBase.replace(/[^\w-]+/g,'_') || 'deck';
+            let filename = SAVE_CONFIG.fixedFilename || '';
+            if (!filename) {
+              const pattern = SAVE_CONFIG.filenamePattern || '%s.json';
+              if (pattern.includes('%s')) {
+                filename = pattern.replace('%s', safeBase);
+              } else {
+                filename = safeBase + pattern;
               }
             }
-          } else {
-            const r = await fetch(AJAX_URL, { method:'POST', body });
-            const j = await safeParseJsonResponse(r);
-            if (!r.ok || !j?.success) throw new Error(resolveResponseError(j, r));
-            responseData = j.data || {};
-          }
-          const displayName = getDeckNameValue();
-          if (!IS_INVENTORY) {
-            ensureSavedDeckOption(responseData?.url || '', filename, displayName);
-          }
-          const success = SAVE_CONFIG.successMessage || 'Saved!\n';
-          const url = responseData?.url || '';
-          let extraNotice = '';
+            entriesForSave = updateJSON();
+            const plaintextContent = deckJsonCache;
+            const encryptedMeta = {
+              content_length: plaintextContent ? plaintextContent.length : 0,
+              card_count: Array.isArray(entriesForSave) ? entriesForSave.length : 0,
+              dataset: DATASET_KEY,
+            };
+            const meta = await fetchEncryptionMetaCached();
+            const parentHelper = (window.parent && window.parent !== window ? window.parent.ptcgdmInventoryCrypto : null) || window.ptcgdmInventoryCrypto || null;
+            const helperStatus = parentHelper && typeof parentHelper.status === 'string' ? parentHelper.status : '';
+            const encryptedMode = IS_INVENTORY && ((meta && meta.status === 'encrypted_v1') || helperStatus === 'encrypted_v1' || helperStatus === 'encrypted_v1_locked');
+            const body=new FormData();
+            body.append('action', SAVE_CONFIG.saveAction || 'ptcgdm_save_inventory');
+            body.append('nonce', SAVE_NONCE);
+            body.append('datasetKey', DATASET_KEY);
+            body.append('filename', filename);
+            body.append('content', plaintextContent);
+            if (SAVE_CONFIG.preferAsyncSync) {
+              body.append('preferAsyncSync', '1');
+            }
+            let responseData = null;
+            if (encryptedMode) {
+              const masterKey = await getMasterKeyFromBridge(['encrypt','decrypt']);
+              if (!masterKey) {
+                throw new Error('Inventory is encrypted. Please unlock it in the Security tab before saving.');
+              }
+              const encryptedBlob = await encryptBlobWithKey(masterKey, new TextEncoder().encode(plaintextContent));
+              const res = await fetch(`${API_BASE}/encrypted-inventory`, {
+                method: 'POST',
+                credentials: 'include',
+                headers: withRestNonce({ 'Content-Type': 'application/json' }),
+                body: JSON.stringify({ dataset: DATASET_KEY, blob: encryptedBlob, meta: encryptedMeta }),
+              });
+              if (!res.ok) {
+                let detail = '';
+                try {
+                  detail = await res.text();
+                } catch (err) {
+                  detail = '';
+                }
+                const suffix = detail ? ` (${detail.trim()})` : '';
+                throw new Error(`Failed to save encrypted inventory.${suffix}`);
+              }
+              responseData = { url: SAVE_CONFIG.autoLoadUrl || '', dataset: DATASET_KEY, encrypted: true };
+              const syncInfo = await triggerEncryptedManualSync(plaintextContent);
+              if (syncInfo) {
+                responseData = Object.assign(responseData, syncInfo);
+                if (syncInfo.syncError) {
+                  renderSaveProgress(syncInfo.syncError);
+                }
+              }
+            } else {
+              const r = await fetch(AJAX_URL, { method:'POST', body });
+              const j = await safeParseJsonResponse(r);
+              if (!r.ok || !j?.success) throw new Error(resolveResponseError(j, r));
+              responseData = j.data || {};
+            }
+            const displayName = getDeckNameValue();
+            if (!IS_INVENTORY) {
+              ensureSavedDeckOption(responseData?.url || '', filename, displayName);
+            }
+            const success = SAVE_CONFIG.successMessage || 'Saved!\n';
+            const url = responseData?.url || '';
+            let extraNotice = '';
+              if (IS_INVENTORY) {
+                const syncStatus = responseData?.syncStatus;
+                if (responseData?.synced) {
+                  const syncMsg = (syncStatus && syncStatus.message) ? syncStatus.message : 'Inventory synced to WooCommerce.';
+                  extraNotice = `\n${syncMsg}`;
+                  renderSaveProgress(syncMsg);
+                } else if (responseData?.syncQueued) {
+                  const queuedMsg = (syncStatus && syncStatus.message)
+                    ? syncStatus.message
+                    : (responseData.syncMessage || 'Inventory sync queued in background.');
+                  extraNotice = `\n${queuedMsg}`;
+                  renderSaveProgress(queuedMsg);
+                } else if (responseData?.syncError) {
+                  extraNotice = `\nSync warning: ${responseData.syncError}`;
+                  renderSaveProgress(responseData.syncError);
+              } else if (encryptedMode) {
+                renderSaveProgress('Encrypted inventory saved.');
+                extraNotice = '\nEncrypted inventory saved.';
+              } else if (syncStatus && syncStatus.message) {
+                renderSaveProgress(syncStatus.message);
+              }
+            } else {
+              renderSaveProgress('Saved.');
+            }
+            alert(success + url + extraNotice);
             if (IS_INVENTORY) {
-              const syncStatus = responseData?.syncStatus;
-              if (responseData?.synced) {
-                const syncMsg = (syncStatus && syncStatus.message) ? syncStatus.message : 'Inventory synced to WooCommerce.';
-                extraNotice = `\n${syncMsg}`;
-                renderSaveProgress(syncMsg);
-              } else if (responseData?.syncQueued) {
-                const queuedMsg = (syncStatus && syncStatus.message)
-                  ? syncStatus.message
-                  : (responseData.syncMessage || 'Inventory sync queued in background.');
-                extraNotice = `\n${queuedMsg}`;
-                renderSaveProgress(queuedMsg);
-              } else if (responseData?.syncError) {
-                extraNotice = `\nSync warning: ${responseData.syncError}`;
-                renderSaveProgress(responseData.syncError);
-            } else if (encryptedMode) {
-              renderSaveProgress('Encrypted inventory saved.');
-              extraNotice = '\nEncrypted inventory saved.';
-            } else if (syncStatus && syncStatus.message) {
-              renderSaveProgress(syncStatus.message);
+              setInventoryData(entriesForSave);
+              deck.length = 0;
+              deckMap.clear();
+              resetInventoryBufferLimitWarning(true);
+              renderDeckTable();
+              updateJSON();
+              await refreshInventoryData();
+              if (els.selQty) {
+                els.selQty.value = '0';
+                updateAddButton();
+              }
             }
-          } else {
-            renderSaveProgress('Saved.');
-          }
-          alert(success + url + extraNotice);
-          if (IS_INVENTORY) {
-            setInventoryData(entriesForSave);
-            deck.length = 0;
-            deckMap.clear();
-            resetInventoryBufferLimitWarning(true);
-            renderDeckTable();
-            updateJSON();
-            await refreshInventoryData();
-            if (els.selQty) {
-              els.selQty.value = '0';
-              updateAddButton();
+            saved = true;
+            break;
+          }catch(e){
+            lastError = e && e.message ? e.message : String(e);
+            if (attempt < maxSaveAttempts) {
+              renderSaveProgress(`Save failed. Retrying (${attempt + 1}/${maxSaveAttempts})…`);
+              continue;
             }
+            renderSaveProgress(lastError);
+            alert('Save failed: ' + lastError);
           }
-        }catch(e){
-          const message = e && e.message ? e.message : e;
-          renderSaveProgress(message);
-          alert('Save failed: ' + message);
         }
-        finally {
-          isSavingDeck = false;
-          if (button) {
-            button.textContent = defaultLabel;
-            button.removeAttribute('data-saving');
-          }
-          setSaveProgressVisible(false);
-          updateDeckButtons();
+        if (!saved) {
+          updateJSON();
         }
+        isSavingDeck = false;
+        if (button) {
+          button.textContent = defaultLabel;
+          button.removeAttribute('data-saving');
+        }
+        setSaveProgressVisible(false);
+        updateDeckButtons();
       }
 
-      async function triggerManualInventorySync(){
+      function handleManualSyncFailure(message){
+        if (manualSyncRetryCount < MANUAL_SYNC_MAX_RETRIES - 1) {
+          manualSyncRetryCount += 1;
+          stopManualSyncPolling('', false, true);
+          triggerManualInventorySync(true);
+          return;
+        }
+        stopManualSyncPolling(message || 'Unable to sync inventory.', true);
+      }
+
+      async function triggerManualInventorySync(isRetry = false){
         if (!IS_INVENTORY || isManualSyncing) {
           return;
         }
@@ -4702,6 +4760,9 @@ function ptcgdm_render_builder(array $config = []){
         if (!action || !nonce) {
           alert('Manual sync is unavailable in this view.');
           return;
+        }
+        if (!isRetry) {
+          manualSyncRetryCount = 0;
         }
         isManualSyncing = true;
         manualSyncRunId = '';
@@ -4743,7 +4804,7 @@ function ptcgdm_render_builder(array $config = []){
             return;
           }
           if (state === 'error') {
-            stopManualSyncPolling(status.message || 'Unable to sync inventory.', true);
+            handleManualSyncFailure(status.message || 'Unable to sync inventory.');
             return;
           }
           if (runId && SAVE_CONFIG.manualSyncStatusAction && SAVE_CONFIG.manualSyncStatusNonce) {
@@ -4754,7 +4815,7 @@ function ptcgdm_render_builder(array $config = []){
           stopManualSyncPolling(status.message || immediateMessage || 'Inventory sync request sent.', false);
         } catch (err) {
           const msg = err && err.message ? err.message : err;
-          stopManualSyncPolling(msg || 'Unknown error', true);
+          handleManualSyncFailure(msg || 'Unknown error');
         } finally {
           if (!manualSyncPollTimer) {
             finishManualSyncUI();
@@ -4973,13 +5034,12 @@ function ptcgdm_render_builder(array $config = []){
         const action = SAVE_CONFIG.manualSyncStatusAction || '';
         const nonce = SAVE_CONFIG.manualSyncStatusNonce || '';
         if (!action || !nonce) {
-          stopManualSyncPolling('Manual sync status is unavailable.', true);
+          handleManualSyncFailure('Manual sync status is unavailable.');
           return;
         }
         if (manualSyncPollStartedAt && (Date.now() - manualSyncPollStartedAt) > MANUAL_SYNC_MAX_POLL_MS) {
-          stopManualSyncPolling(
-            'Manual sync is taking too long. This usually means WP-Cron/loopback is blocked and the queued job never started. Check Site Health → Loopback, or server cron for wp-cron.php.',
-            true
+          handleManualSyncFailure(
+            'Manual sync is taking too long. This usually means WP-Cron/loopback is blocked and the queued job never started. Check Site Health → Loopback, or server cron for wp-cron.php.'
           );
           return;
         }
@@ -5017,9 +5077,8 @@ function ptcgdm_render_builder(array $config = []){
             }
             manualSyncRunIdMismatchCount += 1;
             if (manualSyncRunIdMismatchCount >= MANUAL_SYNC_MAX_RUNID_MISMATCH) {
-              stopManualSyncPolling(
-                'Manual sync status runId kept changing. A new sync may be starting repeatedly or status storage is unstable. Check server logs/debug.log for sync errors.',
-                true
+              handleManualSyncFailure(
+                'Manual sync status runId kept changing. A new sync may be starting repeatedly or status storage is unstable. Check server logs/debug.log for sync errors.'
               );
             }
             return;
@@ -5037,7 +5096,7 @@ function ptcgdm_render_builder(array $config = []){
             return;
           }
           if (state === 'error') {
-            stopManualSyncPolling(status.message || 'Inventory sync failed.', true);
+            handleManualSyncFailure(status.message || 'Inventory sync failed.');
             return;
           }
           if (state !== 'queued' && state !== 'running') {
@@ -5045,18 +5104,18 @@ function ptcgdm_render_builder(array $config = []){
           }
         } catch (pollError) {
           const msg = pollError && pollError.message ? pollError.message : pollError;
-          stopManualSyncPolling(msg || 'Unable to check sync status.', true);
+          handleManualSyncFailure(msg || 'Unable to check sync status.');
         }
       }
 
-      function stopManualSyncPolling(message, isError){
+      function stopManualSyncPolling(message, isError, suppressAlert = false){
         if (manualSyncPollTimer) {
           window.clearInterval(manualSyncPollTimer);
           manualSyncPollTimer = 0;
         }
         manualSyncRunId = '';
         finishManualSyncUI();
-        if (message) {
+        if (message && !suppressAlert) {
           alert(isError ? `Sync failed: ${message}` : message);
         }
       }
@@ -5200,6 +5259,106 @@ function ptcgdm_render_builder(array $config = []){
         }
         return true;
       }
+      async function fetchEncryptedInventoryPending(){
+        const res = await fetch(`${API_BASE}/encrypted-inventory-pending?dataset=${encodeURIComponent(DATASET_KEY)}`, {
+          credentials: 'include',
+          headers: withRestNonce(),
+        });
+        if (!res.ok) {
+          return [];
+        }
+        try {
+          const payload = await res.json();
+          return Array.isArray(payload?.cards) ? payload.cards : [];
+        } catch (err) {
+          return [];
+        }
+      }
+      async function clearEncryptedInventoryPending(){
+        await fetch(`${API_BASE}/encrypted-inventory-pending`, {
+          method: 'POST',
+          credentials: 'include',
+          headers: withRestNonce({ 'Content-Type': 'application/json' }),
+          body: JSON.stringify({ dataset: DATASET_KEY, action: 'clear' }),
+        });
+      }
+      function applyEncryptedInventoryPendingEntry(entry){
+        if(!entry || !entry.id) return false;
+        const id = String(entry.id).trim();
+        if(!id) return false;
+        const variants = entry.variants && typeof entry.variants === 'object' ? entry.variants : {};
+        const normalized = {};
+        Object.entries(variants).forEach(([key, value]) => {
+          const rawQty = value && typeof value === 'object' && value.qty !== undefined ? value.qty : value;
+          const parsed = clampBufferQty(parseInt(rawQty, 10));
+          if(Number.isFinite(parsed)) {
+            normalized[key] = parsed;
+          }
+        });
+        if(!Object.keys(normalized).length && entry.qty !== undefined){
+          const parsed = clampBufferQty(parseInt(entry.qty, 10));
+          if(Number.isFinite(parsed)) {
+            normalized.normal = parsed;
+          }
+        }
+        let nextTotal = 0;
+        Object.values(normalized).forEach(qty => {
+          if(Number.isFinite(qty)) nextTotal += qty;
+        });
+        const existingIndex = deckMap.get(id);
+        if(nextTotal <= 0){
+          if(existingIndex !== undefined){
+            deck.splice(existingIndex, 1);
+            deckMap.clear();
+            deck.forEach((item, index) => deckMap.set(item.id, index));
+            return true;
+          }
+          return false;
+        }
+        let entryRef = null;
+        if(existingIndex === undefined){
+          entryRef = { id, variants: {} };
+          deck.push(entryRef);
+          deckMap.set(id, deck.length - 1);
+        } else {
+          entryRef = deck[existingIndex];
+        }
+        Object.entries(normalized).forEach(([key, qty]) => {
+          const variant = getInventoryVariant(entryRef, key);
+          variant.qty = qty;
+          cleanInventoryVariant(entryRef, key);
+        });
+        sumInventoryVariantQuantities(entryRef);
+        return true;
+      }
+      async function applyEncryptedInventoryPendingUpdates(){
+        if (!IS_INVENTORY) return 0;
+        const pending = await fetchEncryptedInventoryPending();
+        if (!pending.length) return 0;
+        let appliedCount = 0;
+        let changed = false;
+        pending.forEach(entry => {
+          const applied = applyEncryptedInventoryPendingEntry(entry);
+          if (applied) {
+            appliedCount += 1;
+            changed = true;
+          }
+        });
+        if (!changed) {
+          await clearEncryptedInventoryPending();
+          return 0;
+        }
+        renderDeckTable();
+        updateJSON();
+        try {
+          await saveEncryptedInventorySnapshot();
+        } catch (err) {
+          console.error('Failed to persist encrypted inventory updates', err);
+          return 0;
+        }
+        await clearEncryptedInventoryPending();
+        return appliedCount;
+      }
       async function getMasterKeyFromBridge(usages = ['decrypt']){
         const bridge = resolveZkBridge();
         if (!bridge || typeof bridge.getMasterKeyBytes !== 'function') return null;
@@ -5230,7 +5389,13 @@ function ptcgdm_render_builder(array $config = []){
         const text = new TextDecoder().decode(plaintext);
         const data = text ? JSON.parse(text) : {};
         applyDeckData(data, { updateInventory: true });
-        setLoadStatus('Loaded saved inventory.');
+        const pendingApplied = await applyEncryptedInventoryPendingUpdates();
+        if (pendingApplied > 0) {
+          const label = pendingApplied === 1 ? 'update' : 'updates';
+          setLoadStatus(`Loaded saved inventory (applied ${pendingApplied} stock ${label}).`);
+        } else {
+          setLoadStatus('Loaded saved inventory.');
+        }
         encryptedInventoryLoaded = true;
         return true;
       }
@@ -8454,6 +8619,30 @@ function ptcgdm_normalize_inventory_quantity($value, $allow_negative = false) {
   return $qty;
 }
 
+function ptcgdm_normalize_inventory_variant_quantities($variant_quantities, $fallback_quantity = 0) {
+  $normalized = [];
+  if (!is_array($variant_quantities)) {
+    return ['normal' => max(0, (int) $fallback_quantity)];
+  }
+  foreach ($variant_quantities as $key => $value) {
+    $normalized_key = is_string($key) ? trim($key) : '';
+    if ($normalized_key === '') {
+      continue;
+    }
+    if (!array_key_exists($normalized_key, ptcgdm_get_inventory_variant_labels())) {
+      $normalized_key = ptcgdm_inventory_variant_key_from_label($normalized_key);
+    }
+    if ($normalized_key === '' || !array_key_exists($normalized_key, ptcgdm_get_inventory_variant_labels())) {
+      continue;
+    }
+    $normalized[$normalized_key] = max(0, ptcgdm_normalize_inventory_quantity($value));
+  }
+  if (!$normalized) {
+    $normalized['normal'] = max(0, (int) $fallback_quantity);
+  }
+  return $normalized;
+}
+
 function ptcgdm_normalize_special_pattern_slot($slot, $allow_negative = false) {
   $qty = ptcgdm_normalize_inventory_quantity($slot['qty'] ?? 0, $allow_negative);
   $price = array_key_exists('price', (array) $slot) ? ptcgdm_normalize_inventory_price($slot['price']) : null;
@@ -9751,14 +9940,27 @@ function ptcgdm_update_inventory_card_quantity($card_id, $quantity, ?array $vari
     return false;
   }
 
+  if ($dataset_key === '') {
+    $dataset_key = ptcgdm_detect_dataset_from_card_id($card_id);
+  }
+  $dataset_key = ptcgdm_normalize_inventory_dataset_key($dataset_key);
+
   $dir = trailingslashit(ptcgdm_get_inventory_dir());
   $path = ptcgdm_get_inventory_path_for_dataset($dataset_key);
+  $meta = ptcgdm_get_encryption_meta();
+  $encrypted_at_rest = isset($meta['status']) && $meta['status'] === 'encrypted_v1';
   if (!file_exists($path) || !is_readable($path)) {
+    if ($encrypted_at_rest) {
+      return ptcgdm_record_encrypted_inventory_adjustment($card_id, $quantity, $variant_quantities, $dataset_key);
+    }
     return false;
   }
 
   $raw = @file_get_contents($path);
   if ($raw === false || $raw === '') {
+    if ($encrypted_at_rest) {
+      return ptcgdm_record_encrypted_inventory_adjustment($card_id, $quantity, $variant_quantities, $dataset_key);
+    }
     return false;
   }
 
@@ -9776,24 +9978,7 @@ function ptcgdm_update_inventory_card_quantity($card_id, $quantity, ?array $vari
   if ($variant_quantities === null) {
     $variant_quantities = ['normal' => $quantity];
   } else {
-    $normalized = [];
-    foreach ($variant_quantities as $key => $value) {
-      $normalized_key = is_string($key) ? trim($key) : '';
-      if ($normalized_key === '') {
-        continue;
-      }
-      if (!array_key_exists($normalized_key, ptcgdm_get_inventory_variant_labels())) {
-        $normalized_key = ptcgdm_inventory_variant_key_from_label($normalized_key);
-      }
-      if ($normalized_key === '' || !array_key_exists($normalized_key, ptcgdm_get_inventory_variant_labels())) {
-        continue;
-      }
-      $normalized[$normalized_key] = max(0, ptcgdm_normalize_inventory_quantity($value));
-    }
-    if (!$normalized) {
-      $normalized['normal'] = $quantity;
-    }
-    $variant_quantities = $normalized;
+    $variant_quantities = ptcgdm_normalize_inventory_variant_quantities($variant_quantities, $quantity);
   }
 
   $found_index = null;
@@ -10355,6 +10540,58 @@ function ptcgdm_extract_encrypted_payload($decoded) {
   ];
 }
 
+function ptcgdm_get_encrypted_inventory_pending_entries($dataset_key = '') {
+  $dataset = ptcgdm_normalize_inventory_dataset_key($dataset_key);
+  $pending = get_option('ptcgdm_encrypted_inventory_pending', []);
+  if (!is_array($pending)) {
+    $pending = [];
+  }
+  $entries = $pending[$dataset] ?? [];
+  return is_array($entries) ? $entries : [];
+}
+
+function ptcgdm_set_encrypted_inventory_pending_entries($dataset_key, array $entries) {
+  $dataset = ptcgdm_normalize_inventory_dataset_key($dataset_key);
+  if ($dataset === '') {
+    return false;
+  }
+  $pending = get_option('ptcgdm_encrypted_inventory_pending', []);
+  if (!is_array($pending)) {
+    $pending = [];
+  }
+  if ($entries) {
+    $pending[$dataset] = $entries;
+  } else {
+    unset($pending[$dataset]);
+  }
+  update_option('ptcgdm_encrypted_inventory_pending', $pending, false);
+  return true;
+}
+
+function ptcgdm_record_encrypted_inventory_adjustment($card_id, $quantity, ?array $variant_quantities = null, $dataset_key = '') {
+  $card_id = trim((string) $card_id);
+  if ($card_id === '') {
+    return false;
+  }
+  $dataset = ptcgdm_normalize_inventory_dataset_key($dataset_key);
+  if ($dataset === '') {
+    return false;
+  }
+  $entries = ptcgdm_get_encrypted_inventory_pending_entries($dataset);
+  $normalized_variants = ptcgdm_normalize_inventory_variant_quantities($variant_quantities, $quantity);
+  $variants = [];
+  foreach ($normalized_variants as $key => $value) {
+    $variants[$key] = ['qty' => max(0, (int) $value)];
+  }
+  $entries[$card_id] = [
+    'id'         => $card_id,
+    'qty'        => max(0, (int) $quantity),
+    'variants'   => $variants,
+    'updated_at' => time(),
+  ];
+  return ptcgdm_set_encrypted_inventory_pending_entries($dataset, $entries);
+}
+
 /**
  * Register REST routes for encryption metadata and encrypted payload storage.
  */
@@ -10522,6 +10759,47 @@ function ptcgdm_register_encryption_routes() {
       }
 
       return [ 'dataset' => $dataset, 'meta' => $meta ];
+    },
+    'permission_callback' => function () {
+      return ptcgdm_admin_ui_is_authorized();
+    },
+  ]);
+
+  register_rest_route('ptcgdm/v1', '/encrypted-inventory-pending', [
+    'methods'  => WP_REST_Server::READABLE,
+    'callback' => function (WP_REST_Request $request) {
+      $dataset = ptcgdm_normalize_inventory_dataset_key($request->get_param('dataset'));
+      $entries = ptcgdm_get_encrypted_inventory_pending_entries($dataset);
+      return [
+        'dataset' => $dataset,
+        'cards'   => array_values($entries),
+      ];
+    },
+    'permission_callback' => function () {
+      return ptcgdm_admin_ui_is_authorized();
+    },
+  ]);
+
+  register_rest_route('ptcgdm/v1', '/encrypted-inventory-pending', [
+    'methods'  => WP_REST_Server::EDITABLE,
+    'callback' => function (WP_REST_Request $request) {
+      $body = json_decode($request->get_body(), true);
+      if (!is_array($body)) {
+        return new WP_Error('invalid_body', 'Invalid payload.', ['status' => 400]);
+      }
+      $dataset = ptcgdm_normalize_inventory_dataset_key($body['dataset'] ?? '');
+      if ($dataset === '') {
+        return new WP_Error('invalid_dataset', 'Dataset missing.', ['status' => 400]);
+      }
+      $action = isset($body['action']) ? sanitize_text_field((string) $body['action']) : '';
+      if ($action !== 'clear') {
+        return new WP_Error('invalid_action', 'Invalid action.', ['status' => 400]);
+      }
+      ptcgdm_set_encrypted_inventory_pending_entries($dataset, []);
+      return [
+        'dataset' => $dataset,
+        'cleared' => true,
+      ];
     },
     'permission_callback' => function () {
       return ptcgdm_admin_ui_is_authorized();
