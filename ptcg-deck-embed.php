@@ -5239,30 +5239,61 @@ function ptcgdm_render_builder(array $config = []){
         let changed = false;
         latestById.forEach((adjustment) => {
           const variants = adjustment.variants && typeof adjustment.variants === 'object' ? adjustment.variants : {};
-          const entryVariants = {};
-          let computedTotal = 0;
+          const index = indexMap.get(adjustment.id);
+          const existingEntry = index !== undefined ? cards[index] : null;
+          const entry = existingEntry && typeof existingEntry === 'object'
+            ? { ...existingEntry }
+            : { id: adjustment.id };
+          const entryVariants = existingEntry && existingEntry.variants && typeof existingEntry.variants === 'object'
+            ? (cloneInventoryVariantData(existingEntry.variants) || {})
+            : {};
           const variantKeys = new Set(INVENTORY_VARIANTS.map(({ key }) => key));
+          Object.keys(entryVariants).forEach((key) => variantKeys.add(key));
           Object.keys(variants).forEach((key) => variantKeys.add(key));
           variantKeys.forEach((key) => {
             const qtyRaw = variants[key];
             const qty = Number.isFinite(qtyRaw) ? qtyRaw : parseInt(qtyRaw, 10) || 0;
-            if (qty > 0) {
-              entryVariants[key] = { qty };
-              computedTotal += qty;
-            }
+            const existingVariant = entryVariants[key] && typeof entryVariants[key] === 'object'
+              ? { ...entryVariants[key] }
+              : {};
+            existingVariant.qty = Number.isFinite(qty) ? qty : 0;
+            entryVariants[key] = existingVariant;
           });
           let totalQty = Number.isFinite(adjustment.qty) ? adjustment.qty : parseInt(adjustment.qty, 10);
           if (!Number.isFinite(totalQty)) totalQty = 0;
-          if (totalQty > 0 && computedTotal === 0) {
-            entryVariants.normal = { qty: totalQty };
-            computedTotal = totalQty;
-          }
-          const index = indexMap.get(adjustment.id);
-          if (computedTotal > 0 || Object.keys(entryVariants).length) {
-            const entry = { id: adjustment.id, variants: entryVariants };
-            if (computedTotal > 0) {
-              entry.qty = computedTotal;
+          let computedTotal = 0;
+          let hasData = false;
+          Object.keys(entryVariants).forEach((key) => {
+            const variant = entryVariants[key];
+            if (!variant || typeof variant !== 'object') {
+              return;
             }
+            const qty = Number.isFinite(variant.qty) ? variant.qty : parseInt(variant.qty, 10) || 0;
+            if (Number.isFinite(qty) && qty !== 0) {
+              computedTotal += qty;
+            }
+            const price = parsePriceValue(variant.price);
+            const hasPatterns = key === SPECIAL_PATTERN_KEY && hasSpecialPatternData(variant);
+            if ((Number.isFinite(qty) && qty !== 0) || Number.isFinite(price) || hasPatterns) {
+              hasData = true;
+            }
+          });
+          if (computedTotal === 0 && totalQty > 0) {
+            const existingNormal = entryVariants.normal && typeof entryVariants.normal === 'object'
+              ? { ...entryVariants.normal }
+              : {};
+            existingNormal.qty = totalQty;
+            entryVariants.normal = existingNormal;
+            computedTotal = totalQty;
+            hasData = true;
+          }
+          if (computedTotal > 0) {
+            entry.qty = computedTotal;
+          } else if (entry.qty !== undefined) {
+            delete entry.qty;
+          }
+          if (hasData) {
+            entry.variants = entryVariants;
             if (index === undefined) {
               indexMap.set(adjustment.id, cards.length);
               cards.push(entry);
@@ -5292,6 +5323,33 @@ function ptcgdm_render_builder(array $config = []){
         if (!masterKey) {
           throw new Error('Inventory is encrypted. Please unlock it in the Security tab before saving.');
         }
+        const encryptedBlob = await encryptBlobWithKey(masterKey, new TextEncoder().encode(plaintextContent));
+        const res = await fetch(`${API_BASE}/encrypted-inventory`, {
+          method: 'POST',
+          credentials: 'include',
+          headers: withRestNonce({ 'Content-Type': 'application/json' }),
+          body: JSON.stringify({ dataset: DATASET_KEY, blob: encryptedBlob, meta: encryptedMeta }),
+        });
+        if (!res.ok) {
+          let detail = '';
+          try {
+            detail = await res.text();
+          } catch (err) {
+            detail = '';
+          }
+          const suffix = detail ? ` (${detail.trim()})` : '';
+          throw new Error(`Failed to save encrypted inventory.${suffix}`);
+        }
+        return true;
+      }
+      async function saveMergedEncryptedInventorySnapshot(masterKey, data){
+        if (!IS_INVENTORY || !masterKey) return false;
+        const plaintextContent = JSON.stringify(data || {});
+        const encryptedMeta = {
+          content_length: plaintextContent.length,
+          card_count: Array.isArray(data?.cards) ? data.cards.length : 0,
+          dataset: DATASET_KEY,
+        };
         const encryptedBlob = await encryptBlobWithKey(masterKey, new TextEncoder().encode(plaintextContent));
         const res = await fetch(`${API_BASE}/encrypted-inventory`, {
           method: 'POST',
@@ -5341,20 +5399,24 @@ function ptcgdm_render_builder(array $config = []){
         const text = new TextDecoder().decode(plaintext);
         let data = text ? JSON.parse(text) : {};
         let loadMessage = 'Loaded saved inventory.';
+        let pendingResult = null;
         if (IS_INVENTORY) {
           const adjustments = await fetchPendingInventoryAdjustments();
-          const result = applyPendingInventoryAdjustments(data, adjustments);
-          if (result.applied) {
-            data = result.data;
-            loadMessage = `Loaded saved inventory. Applied ${result.count} pending adjustment${result.count === 1 ? '' : 's'}.`;
-            try {
-              await clearPendingInventoryAdjustments();
-            } catch (err) {
-              console.error('Failed to clear pending adjustments.', err);
-            }
+          pendingResult = applyPendingInventoryAdjustments(data, adjustments);
+          if (pendingResult.applied) {
+            data = pendingResult.data;
+            loadMessage = `Loaded saved inventory. Applied ${pendingResult.count} pending adjustment${pendingResult.count === 1 ? '' : 's'}.`;
           }
         }
         applyDeckData(data, { updateInventory: true });
+        if (IS_INVENTORY && pendingResult?.applied) {
+          try {
+            await saveMergedEncryptedInventorySnapshot(masterKey, data);
+            await clearPendingInventoryAdjustments();
+          } catch (err) {
+            console.error('Failed to save encrypted inventory after applying adjustments.', err);
+          }
+        }
         setLoadStatus(loadMessage);
         encryptedInventoryLoaded = true;
         return true;
@@ -10242,6 +10304,55 @@ function ptcgdm_handle_inventory_stock_change($product) {
 
 if (function_exists('add_action')) {
   add_action('woocommerce_product_set_stock', 'ptcgdm_handle_inventory_stock_change', 10, 1);
+  add_action('woocommerce_reduce_order_stock', 'ptcgdm_capture_order_delta_on_stock_reduce', 10, 1);
+}
+
+function ptcgdm_capture_order_delta_on_stock_reduce($order) {
+  if (!function_exists('wc_get_order')) {
+    return;
+  }
+
+  if (is_numeric($order)) {
+    $order = wc_get_order((int) $order);
+  }
+
+  if (!$order) {
+    return;
+  }
+
+  $meta = ptcgdm_get_encryption_meta();
+  $encrypted_active = ($meta['status'] ?? 'unencrypted') === 'encrypted_v1';
+  if (!$encrypted_active) {
+    return;
+  }
+
+  $flag_key = '_ptcgdm_delta_captured';
+  if ($order->get_meta($flag_key, true)) {
+    return;
+  }
+
+  $seen_products = [];
+  foreach ($order->get_items() as $item) {
+    if (!is_object($item) || !method_exists($item, 'get_product')) {
+      continue;
+    }
+
+    $product = $item->get_product();
+    if (!($product instanceof WC_Product)) {
+      continue;
+    }
+
+    $product_id = $product->get_id();
+    if (!$product_id || isset($seen_products[$product_id])) {
+      continue;
+    }
+
+    $seen_products[$product_id] = true;
+    ptcgdm_handle_inventory_stock_change($product);
+  }
+
+  $order->update_meta_data($flag_key, 1);
+  $order->save_meta_data();
 }
 
 function ptcgdm_render_pokemon_inventory() {
