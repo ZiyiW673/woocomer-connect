@@ -10242,6 +10242,55 @@ function ptcgdm_handle_inventory_stock_change($product) {
 
 if (function_exists('add_action')) {
   add_action('woocommerce_product_set_stock', 'ptcgdm_handle_inventory_stock_change', 10, 1);
+  add_action('woocommerce_reduce_order_stock', 'ptcgdm_capture_order_delta_on_stock_reduce', 10, 1);
+}
+
+function ptcgdm_capture_order_delta_on_stock_reduce($order) {
+  if (!function_exists('wc_get_order')) {
+    return;
+  }
+
+  if (is_numeric($order)) {
+    $order = wc_get_order((int) $order);
+  }
+
+  if (!$order) {
+    return;
+  }
+
+  $meta = ptcgdm_get_encryption_meta();
+  $encrypted_active = ($meta['status'] ?? 'unencrypted') === 'encrypted_v1';
+  if (!$encrypted_active) {
+    return;
+  }
+
+  $flag_key = '_ptcgdm_delta_captured';
+  if ($order->get_meta($flag_key, true)) {
+    return;
+  }
+
+  $seen_products = [];
+  foreach ($order->get_items() as $item) {
+    if (!is_object($item) || !method_exists($item, 'get_product')) {
+      continue;
+    }
+
+    $product = $item->get_product();
+    if (!($product instanceof WC_Product)) {
+      continue;
+    }
+
+    $product_id = $product->get_id();
+    if (!$product_id || isset($seen_products[$product_id])) {
+      continue;
+    }
+
+    $seen_products[$product_id] = true;
+    ptcgdm_handle_inventory_stock_change($product);
+  }
+
+  $order->update_meta_data($flag_key, 1);
+  $order->save_meta_data();
 }
 
 function ptcgdm_render_pokemon_inventory() {
