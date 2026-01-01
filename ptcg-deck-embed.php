@@ -9502,20 +9502,35 @@ function ptcgdm_sync_inventory_products(array $entries, array $context = []) {
 
       $sku = $card_id;
       if ($dataset_key === 'one_piece') {
-        $sku = 'op-' . $card_id;
+        $unique_token = $set_id !== '' ? $set_id : $card_number;
+        $unique_token = strtolower(preg_replace('/[^a-z0-9]+/i', '', (string) $unique_token));
+        if ($unique_token === '') {
+          $unique_token = substr(md5($card_id), 0, 8);
+        }
+        $sku = sprintf('op-%s-%s', $card_id, $unique_token);
       }
-      $legacy_sku = null;
-      $product_id = wc_get_product_id_by_sku($sku);
-      if (!$product_id && $dataset_key === 'one_piece') {
-        $legacy_sku = $card_id;
-        $product_id = wc_get_product_id_by_sku($legacy_sku);
-      }
-      $product = null;
 
+      $legacy_skus = [];
+      if ($dataset_key === 'one_piece') {
+        $legacy_skus[] = 'op-' . $card_id;
+        $legacy_skus[] = $card_id;
+      }
+
+      $product_id = wc_get_product_id_by_sku($sku);
+      if (!$product_id && $legacy_skus) {
+        foreach ($legacy_skus as $legacy_sku) {
+          $product_id = wc_get_product_id_by_sku($legacy_sku);
+          if ($product_id) {
+            break;
+          }
+        }
+      }
+
+      $product = null;
       if ($product_id) {
         $product = wc_get_product($product_id);
         if ($product instanceof WC_Product) {
-          if ($legacy_sku !== null && method_exists($product, 'set_sku')) {
+          if (method_exists($product, 'set_sku') && $product->get_sku() !== $sku) {
             $product->set_sku($sku);
           }
           $product_game = ptcgdm_get_product_game_slug($product_id, $product);
