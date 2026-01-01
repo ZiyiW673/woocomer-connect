@@ -9501,12 +9501,23 @@ function ptcgdm_sync_inventory_products(array $entries, array $context = []) {
       }
 
       $sku = $card_id;
+      if ($dataset_key === 'one_piece') {
+        $sku = 'op-' . $card_id;
+      }
+      $legacy_sku = null;
       $product_id = wc_get_product_id_by_sku($sku);
+      if (!$product_id && $dataset_key === 'one_piece') {
+        $legacy_sku = $card_id;
+        $product_id = wc_get_product_id_by_sku($legacy_sku);
+      }
       $product = null;
 
       if ($product_id) {
         $product = wc_get_product($product_id);
         if ($product instanceof WC_Product) {
+          if ($legacy_sku !== null && method_exists($product, 'set_sku')) {
+            $product->set_sku($sku);
+          }
           $product_game = ptcgdm_get_product_game_slug($product_id, $product);
           if ($sync_scope === 'scoped' && $product_game !== '' && $product_game !== $dataset_key) {
             $skipped_other_game_products++;
