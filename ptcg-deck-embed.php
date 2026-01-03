@@ -1089,6 +1089,7 @@ function ptcgdm_render_builder(array $config = []){
       </div>
       <?php endif; ?>
 
+      <h3 style="margin:16px 0 8px">Add by card info</h3>
       <div class="grid4" style="margin-top:12px">
         <div>
           <label>Set</label>
