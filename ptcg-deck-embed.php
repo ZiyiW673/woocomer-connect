@@ -1376,20 +1376,24 @@ function ptcgdm_render_builder(array $config = []){
         return result;
       }
 
-      const ALLOWED_GROUPS = Object.fromEntries(
+      let allowedGroups = Object.fromEntries(
         Object.entries(SERIES_CONFIG)
           .map(([series, entries]) => [series, normaliseGroupEntries(entries)])
           .filter(([, entries]) => entries.length)
       );
 
-      const ALLOWED_SET_IDS = new Set();
-      Object.values(ALLOWED_GROUPS).forEach(entries => {
-        entries.forEach(([id]) => {
-          if (id) {
-            ALLOWED_SET_IDS.add(id);
-          }
+      const allowedSetIds = new Set();
+      const rebuildAllowedSetIds = () => {
+        allowedSetIds.clear();
+        Object.values(allowedGroups).forEach(entries => {
+          entries.forEach(([id]) => {
+            if (id) {
+              allowedSetIds.add(id);
+            }
+          });
         });
-      });
+      };
+      rebuildAllowedSetIds();
 
       function makeDatasetUrl(path) {
         if (path === null || path === undefined) {
@@ -2073,8 +2077,28 @@ function ptcgdm_render_builder(array $config = []){
       });
 
       async function populateSetDropdown(){
+        if (!Object.keys(allowedGroups).length) {
+          const index = await loadSetIndex();
+          const entries = index.map(meta => {
+            if (!meta || typeof meta !== 'object') return null;
+            const rawId = String(meta.id || '').trim();
+            if (!rawId) return null;
+            const id = rawId.toLowerCase();
+            const label = typeof meta.name === 'string' ? meta.name.trim() : '';
+            registerSetMeta(meta);
+            if (label && !SET_LABELS[id]) {
+              SET_LABELS[id] = label;
+            }
+            return [id, label || rawId.toUpperCase()];
+          }).filter(Boolean);
+          if (entries.length) {
+            entries.sort((a, b) => a[0].localeCompare(b[0]));
+            allowedGroups = { Sets: entries };
+            rebuildAllowedSetIds();
+          }
+        }
         const optGroups = [];
-        for (const [group, arr] of Object.entries(ALLOWED_GROUPS)){
+        for (const [group, arr] of Object.entries(allowedGroups)){
           const ids = arr.map(([id])=>id);
           const metas = await Promise.all(ids.map(id=>getSetMetadata(id)));
           const items = arr.map(([id, fallbackLabel], idx)=>{
@@ -2104,7 +2128,9 @@ function ptcgdm_render_builder(array $config = []){
       }
 
       async function loadDataset(){
-        const ids = Array.from(ALLOWED_SET_IDS); const q=[...ids]; let done=0,total=0;
+        const ids = Array.from(allowedSetIds);
+        if(!ids.length) return;
+        const q=[...ids]; let done=0,total=0;
         const worker=async()=>{ while(q.length){ const id=q.shift(); const n=await loadSet(id); total+=n; done++; } };
         await Promise.all(Array.from({length:8}, worker));
       }
@@ -3001,10 +3027,10 @@ function ptcgdm_render_builder(array $config = []){
           if(setCodeLookup.has(variant)) return setCodeLookup.get(variant);
         }
         const lower = raw.toLowerCase();
-        if(ALLOWED_SET_IDS.has(lower)) return lower;
+        if(allowedSetIds.has(lower)) return lower;
         for(const variant of variants){
           const lowerVariant = variant.toLowerCase();
-          if(ALLOWED_SET_IDS.has(lowerVariant)) return lowerVariant;
+          if(allowedSetIds.has(lowerVariant)) return lowerVariant;
           const upperVariant = lowerVariant.toUpperCase();
           if(setCodeLookup.has(upperVariant)) return setCodeLookup.get(upperVariant);
         }
