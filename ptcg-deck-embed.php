@@ -1078,7 +1078,7 @@ function ptcgdm_render_builder(array $config = []){
 
       <?php if ($dataset_key === 'one_piece') : ?>
       <div style="margin-top:16px">
-        <label for="bulkInput">Bulk Add by Code</label>
+        <h3 style="margin:0 0 8px">Bulk Add by Code</h3>
         <textarea id="bulkInput" class="bulk-input" rows="6" placeholder="OP13-001 5" spellcheck="false"></textarea>
         <p class="description">Enter one card per line using the set-and-card code plus quantity, e.g., <code>OP13-001 5</code>.</p>
         <div class="bulk-actions">
@@ -1090,7 +1090,7 @@ function ptcgdm_render_builder(array $config = []){
       </div>
       <?php else : ?>
       <div style="margin-top:16px">
-        <label for="bulkInput">Bulk Add by Code</label>
+        <h3 style="margin:0 0 8px">Bulk Add by Code</h3>
         <textarea id="bulkInput" class="bulk-input" rows="8" placeholder="TWM 141/167&#10;MEG 054/132 2 0 0" spellcheck="false"></textarea>
         <p class="description">Enter one card per line using the set code and card number (e.g., <code>TWM 141/167</code>). Optional variant quantities (Normal, Foil, Reverse, Stamped) can follow.</p>
         <div class="bulk-actions">
