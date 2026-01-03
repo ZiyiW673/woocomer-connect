@@ -9350,6 +9350,8 @@ function ptcgdm_assign_product_categories($product, array $card_data, array $car
   $game_label = '';
   if ($normalized_dataset === 'one_piece') {
     $game_label = 'One Piece TCG';
+  } elseif ($normalized_dataset === 'riftbound') {
+    $game_label = 'Riftbound TCG';
   } else {
     $game_label = 'Pokemon TCG';
   }
