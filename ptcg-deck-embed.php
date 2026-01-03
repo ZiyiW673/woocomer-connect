@@ -13,6 +13,8 @@ define('PTCGDM_DATA_DIR', PTCGDM_DIR . 'pokemon-tcg-data');
 define('PTCGDM_DATA_URL', PTCGDM_URL . 'pokemon-tcg-data');
 define('PTCGDM_ONE_PIECE_DATA_DIR', PTCGDM_DIR . 'one-piece-tcg-data');
 define('PTCGDM_ONE_PIECE_DATA_URL', PTCGDM_URL . 'one-piece-tcg-data');
+define('PTCGDM_RIFTBOUND_DATA_DIR', PTCGDM_DIR . 'RiftBound-tcg-data');
+define('PTCGDM_RIFTBOUND_DATA_URL', PTCGDM_URL . 'RiftBound-tcg-data');
 define('PTCGDM_PRODUCT_IMAGE_SIZE', 512);
 define('PTCGDM_INVENTORY_SUBDIR', 'card-inventory');
 define('PTCGDM_INVENTORY_FILENAME', 'card-inventory.json');
@@ -74,6 +76,19 @@ function ptcgdm_get_dataset_definitions() {
       'set_index_paths'  => ['sets/en/index.json'],
       'is_pokemon'       => false,
     ],
+    'riftbound' => [
+      'key'              => 'riftbound',
+      'label'            => 'Riftbound TCG',
+      'data_dir'         => PTCGDM_RIFTBOUND_DATA_DIR,
+      'data_url'         => PTCGDM_RIFTBOUND_DATA_URL,
+      'default_format'   => 'Constructed',
+      'page_title'       => 'Riftbound – Card Inventory',
+      'page_description' => 'Track Riftbound card inventory using the local dataset.',
+      'supertype_options'=> ['Champion Unit', 'Unit', 'Signature Unit', 'Spell', 'Signature Spell', 'Legend', 'Gear', 'Battlefield', 'Rune', 'Token'],
+      'series_config'    => null,
+      'set_index_paths'  => ['sets/en.json'],
+      'is_pokemon'       => false,
+    ],
   ];
 
   return $definitions;
@@ -97,7 +112,11 @@ function ptcgdm_get_dataset_settings($dataset_key = 'pokemon') {
   $set_labels = [];
 
   if ($series_config === null) {
-    $series_config = ptcgdm_build_one_piece_series_config($definition);
+    if ($key === 'one_piece') {
+      $series_config = ptcgdm_build_one_piece_series_config($definition);
+    } else {
+      $series_config = ptcgdm_build_set_index_series_config($definition);
+    }
   }
 
   if (is_array($series_config)) {
@@ -201,6 +220,84 @@ function ptcgdm_build_one_piece_series_config(array $definition) {
   return $groups;
 }
 
+function ptcgdm_build_set_index_series_config(array $definition, $group_label = 'Sets') {
+  $data_dir = isset($definition['data_dir']) ? trailingslashit($definition['data_dir']) : '';
+  if ($data_dir === '' || !is_dir($data_dir)) {
+    return [];
+  }
+
+  $paths = isset($definition['set_index_paths']) && is_array($definition['set_index_paths'])
+    ? $definition['set_index_paths']
+    : [];
+  if (!$paths) {
+    $paths = ['sets/en.json', 'sets.json', 'sets/all.json'];
+  }
+
+  $entries = [];
+  foreach ($paths as $path) {
+    $path = trim((string) $path);
+    if ($path === '') {
+      continue;
+    }
+    $full_path = $data_dir . ltrim($path, '/');
+    if (!file_exists($full_path)) {
+      continue;
+    }
+
+    $content = @file_get_contents($full_path);
+    if (!$content) {
+      continue;
+    }
+
+    $decoded = json_decode($content, true);
+    if (is_array($decoded)) {
+      if (ptcgdm_is_list($decoded)) {
+        $entries = $decoded;
+      } elseif (!empty($decoded['data']) && is_array($decoded['data'])) {
+        $entries = $decoded['data'];
+      } elseif (!empty($decoded['sets']) && is_array($decoded['sets'])) {
+        $entries = $decoded['sets'];
+      }
+    }
+
+    if ($entries) {
+      break;
+    }
+  }
+
+  if (!$entries) {
+    return [];
+  }
+
+  $list = [];
+  foreach ($entries as $entry) {
+    if (!is_array($entry)) {
+      continue;
+    }
+    $id = isset($entry['id']) ? trim((string) $entry['id']) : '';
+    if ($id === '') {
+      continue;
+    }
+    $label = isset($entry['name']) ? trim((string) $entry['name']) : '';
+    if ($label === '') {
+      $label = strtoupper($id);
+    }
+    $list[] = [$id, $label];
+  }
+
+  if (!$list) {
+    return [];
+  }
+
+  usort($list, function ($a, $b) {
+    $id_a = isset($a[0]) ? strtolower($a[0]) : '';
+    $id_b = isset($b[0]) ? strtolower($b[0]) : '';
+    return $id_a <=> $id_b;
+  });
+
+  return [$group_label => $list];
+}
+
 function ptcgdm_get_one_piece_set_label_overrides() {
   return [
     'op03' => '-PILLARS OF STRENGTH- [OP-03]',
@@ -282,6 +379,7 @@ function ptcgdm_normalize_inventory_dataset_key($dataset_key = '') {
 }
 
 function ptcgdm_detect_dataset_from_card_id($card_id) {
+  static $set_map = null;
   $card_id = trim((string) $card_id);
   if ($card_id === '') {
     return '';
@@ -289,6 +387,29 @@ function ptcgdm_detect_dataset_from_card_id($card_id) {
 
   if (preg_match('/^(op|eb|st|prb)\d+-/i', $card_id)) {
     return 'one_piece';
+  }
+
+  if ($set_map === null) {
+    $set_map = [];
+    $definitions = ptcgdm_get_dataset_definitions();
+    foreach ($definitions as $dataset_key => $definition) {
+      if ($dataset_key === 'pokemon') {
+        continue;
+      }
+      $settings = ptcgdm_get_dataset_settings($dataset_key);
+      $set_labels = isset($settings['set_labels']) && is_array($settings['set_labels']) ? $settings['set_labels'] : [];
+      foreach (array_keys($set_labels) as $set_id) {
+        $lookup = strtolower(trim((string) $set_id));
+        if ($lookup !== '' && !isset($set_map[$lookup])) {
+          $set_map[$lookup] = $dataset_key;
+        }
+      }
+    }
+  }
+
+  $set_id = strtolower(ptcgdm_extract_set_from_card($card_id));
+  if ($set_id !== '' && isset($set_map[$set_id])) {
+    return $set_map[$set_id];
   }
 
   return '';
@@ -816,6 +937,19 @@ function ptcgdm_render_builder(array $config = []){
       'qty_header'   => 'Qty',
       'price_header' => 'Price',
     ];
+  } elseif ($dataset_key === 'riftbound') {
+    $inventory_variant_columns[] = [
+      'key'          => 'normal',
+      'label'        => 'Normal',
+      'qty_header'   => 'Qty (Normal)',
+      'price_header' => 'Price (Normal)',
+    ];
+    $inventory_variant_columns[] = [
+      'key'          => 'foil',
+      'label'        => 'Foil',
+      'qty_header'   => 'Qty (Foil)',
+      'price_header' => 'Price (Foil)',
+    ];
   } else {
     $inventory_variant_columns[] = [
       'key'          => 'normal',
@@ -936,6 +1070,39 @@ function ptcgdm_render_builder(array $config = []){
     <div class="ptcg" id="ptcg-root">
       <div id="dbStatusRow"><strong>Status:</strong> <span id="dbStatus" class="muted">Loading local dataset…</span></div>
 
+      <div class="row" style="margin-top:12px;align-items:flex-end">
+        <div style="flex:1 1 420px">
+          <p class="description" id="deckLoadStatus" data-default="<?php echo esc_attr($load_message); ?>"><?php echo esc_html($load_message); ?></p>
+        </div>
+      </div>
+
+      <?php if ($dataset_key === 'one_piece') : ?>
+      <div style="margin-top:16px">
+        <h3 style="margin:0 0 8px">Bulk Add by Code</h3>
+        <textarea id="bulkInput" class="bulk-input" rows="6" placeholder="OP13-001 5" spellcheck="false"></textarea>
+        <p class="description">Enter one card per line using the set-and-card code plus quantity, e.g., <code>OP13-001 5</code>.</p>
+        <div class="bulk-actions">
+          <button id="btnBulkAdd" class="btn secondary" disabled>Add cards</button>
+          <button id="btnClearDeck" class="btn danger" disabled><?php echo esc_html($clear_button_label); ?></button>
+          <div class="spacer"></div>
+          <div id="bulkStatus" class="muted bulk-status"></div>
+        </div>
+      </div>
+      <?php else : ?>
+      <div style="margin-top:16px">
+        <h3 style="margin:0 0 8px">Bulk Add by Code</h3>
+        <textarea id="bulkInput" class="bulk-input" rows="8" placeholder="TWM 141/167&#10;MEG 054/132 2 0 0" spellcheck="false"></textarea>
+        <p class="description">Enter one card per line using the set code and card number (e.g., <code>TWM 141/167</code>). Optional variant quantities (Normal, Foil, Reverse, Stamped) can follow.</p>
+        <div class="bulk-actions">
+          <button id="btnBulkAdd" class="btn secondary" disabled>Add cards</button>
+          <button id="btnClearDeck" class="btn danger" disabled><?php echo esc_html($clear_button_label); ?></button>
+          <div class="spacer"></div>
+          <div id="bulkStatus" class="muted bulk-status"></div>
+        </div>
+      </div>
+      <?php endif; ?>
+
+      <h3 style="margin:16px 0 8px">Add by card info</h3>
       <div class="grid4" style="margin-top:12px">
         <div>
           <label>Set</label>
@@ -954,38 +1121,6 @@ function ptcgdm_render_builder(array $config = []){
           </select>
         </div>
       </div>
-
-      <div class="row" style="margin-top:12px;align-items:flex-end">
-        <div style="flex:1 1 420px">
-          <p class="description" id="deckLoadStatus" data-default="<?php echo esc_attr($load_message); ?>"><?php echo esc_html($load_message); ?></p>
-        </div>
-      </div>
-
-      <?php if ($dataset_key === 'one_piece') : ?>
-      <div style="margin-top:16px">
-        <label for="bulkInput">Bulk Add by Code</label>
-        <textarea id="bulkInput" class="bulk-input" rows="6" placeholder="OP13-001 5" spellcheck="false"></textarea>
-        <p class="description">Enter one card per line using the set-and-card code plus quantity, e.g., <code>OP13-001 5</code>.</p>
-        <div class="bulk-actions">
-          <button id="btnBulkAdd" class="btn secondary" disabled>Add cards</button>
-          <button id="btnClearDeck" class="btn danger" disabled><?php echo esc_html($clear_button_label); ?></button>
-          <div class="spacer"></div>
-          <div id="bulkStatus" class="muted bulk-status"></div>
-        </div>
-      </div>
-      <?php else : ?>
-      <div style="margin-top:16px">
-        <label for="bulkInput">Bulk Add by Code</label>
-        <textarea id="bulkInput" class="bulk-input" rows="8" placeholder="TWM 141/167&#10;MEG 054/132 2 0 0" spellcheck="false"></textarea>
-        <p class="description">Enter one card per line using the set code and card number (e.g., <code>TWM 141/167</code>). Optional variant quantities (Normal, Foil, Reverse, Stamped) can follow.</p>
-        <div class="bulk-actions">
-          <button id="btnBulkAdd" class="btn secondary" disabled>Add cards</button>
-          <button id="btnClearDeck" class="btn danger" disabled><?php echo esc_html($clear_button_label); ?></button>
-          <div class="spacer"></div>
-          <div id="bulkStatus" class="muted bulk-status"></div>
-        </div>
-      </div>
-      <?php endif; ?>
 
       <div class="row" style="margin-top:12px;align-items:flex-end">
         <div style="flex:1 1 600px"><label>Name (type to filter)</label><input id="nameInput" placeholder="e.g., Pikachu, Nest Ball"></div>
@@ -1223,8 +1358,8 @@ function ptcgdm_render_builder(array $config = []){
         'Mega Evolution': ['me1']
       };
 
-      const SERIES_CONFIG = (SAVE_CONFIG.seriesConfig && typeof SAVE_CONFIG.seriesConfig === 'object' && !Array.isArray(SAVE_CONFIG.seriesConfig))
-        ? SAVE_CONFIG.seriesConfig
+      const SERIES_CONFIG = (SAVE_CONFIG.seriesConfig && typeof SAVE_CONFIG.seriesConfig === 'object')
+        ? (Array.isArray(SAVE_CONFIG.seriesConfig) ? {} : SAVE_CONFIG.seriesConfig)
         : DEFAULT_SERIES_CONFIG;
 
       function normaliseGroupEntries(entries) {
@@ -1255,20 +1390,24 @@ function ptcgdm_render_builder(array $config = []){
         return result;
       }
 
-      const ALLOWED_GROUPS = Object.fromEntries(
+      let allowedGroups = Object.fromEntries(
         Object.entries(SERIES_CONFIG)
           .map(([series, entries]) => [series, normaliseGroupEntries(entries)])
           .filter(([, entries]) => entries.length)
       );
 
-      const ALLOWED_SET_IDS = new Set();
-      Object.values(ALLOWED_GROUPS).forEach(entries => {
-        entries.forEach(([id]) => {
-          if (id) {
-            ALLOWED_SET_IDS.add(id);
-          }
+      const allowedSetIds = new Set();
+      const rebuildAllowedSetIds = () => {
+        allowedSetIds.clear();
+        Object.values(allowedGroups).forEach(entries => {
+          entries.forEach(([id]) => {
+            if (id) {
+              allowedSetIds.add(id);
+            }
+          });
         });
-      });
+      };
+      rebuildAllowedSetIds();
 
       function makeDatasetUrl(path) {
         if (path === null || path === undefined) {
@@ -1952,8 +2091,28 @@ function ptcgdm_render_builder(array $config = []){
       });
 
       async function populateSetDropdown(){
+        if (!Object.keys(allowedGroups).length) {
+          const index = await loadSetIndex();
+          const entries = index.map(meta => {
+            if (!meta || typeof meta !== 'object') return null;
+            const rawId = String(meta.id || '').trim();
+            if (!rawId) return null;
+            const id = rawId.toLowerCase();
+            const label = typeof meta.name === 'string' ? meta.name.trim() : '';
+            registerSetMeta(meta);
+            if (label && !SET_LABELS[id]) {
+              SET_LABELS[id] = label;
+            }
+            return [id, label || rawId.toUpperCase()];
+          }).filter(Boolean);
+          if (entries.length) {
+            entries.sort((a, b) => a[0].localeCompare(b[0]));
+            allowedGroups = { Sets: entries };
+            rebuildAllowedSetIds();
+          }
+        }
         const optGroups = [];
-        for (const [group, arr] of Object.entries(ALLOWED_GROUPS)){
+        for (const [group, arr] of Object.entries(allowedGroups)){
           const ids = arr.map(([id])=>id);
           const metas = await Promise.all(ids.map(id=>getSetMetadata(id)));
           const items = arr.map(([id, fallbackLabel], idx)=>{
@@ -1983,7 +2142,9 @@ function ptcgdm_render_builder(array $config = []){
       }
 
       async function loadDataset(){
-        const ids = Array.from(ALLOWED_SET_IDS); const q=[...ids]; let done=0,total=0;
+        const ids = Array.from(allowedSetIds);
+        if(!ids.length) return;
+        const q=[...ids]; let done=0,total=0;
         const worker=async()=>{ while(q.length){ const id=q.shift(); const n=await loadSet(id); total+=n; done++; } };
         await Promise.all(Array.from({length:8}, worker));
       }
@@ -2016,6 +2177,14 @@ function ptcgdm_render_builder(array $config = []){
             let added=0;
             for(const c of arr){
               if(!c?.id) continue;
+              if (DATASET_KEY === 'riftbound') {
+                const hasNumber = c.number !== null && c.number !== undefined && String(c.number).trim() !== '';
+                const hasCode = c.code !== null && c.code !== undefined && String(c.code).trim() !== '';
+                const hasCardType = c.cardType !== null && c.cardType !== undefined && String(c.cardType).trim() !== '';
+                if (!hasNumber && !hasCode && !hasCardType) {
+                  continue;
+                }
+              }
               hydrateCardSet(c, canonicalId, setMeta);
               if(!c.supertype && c.type){
                 c.supertype = c.type;
@@ -2289,7 +2458,14 @@ function ptcgdm_render_builder(array $config = []){
       }
 
       function applyDatasetSpecificCardAdjustments(card){
-        if(DATASET_KEY !== 'one_piece' || !card || !card.id) return;
+        if(!card || !card.id) return;
+        if(DATASET_KEY === 'riftbound'){
+          if(!card.supertype && card.cardType){
+            card.supertype = card.cardType;
+          }
+          return;
+        }
+        if(DATASET_KEY !== 'one_piece') return;
         const variantKey = detectOnePieceVariantKey(card.id);
         const variantLabel = variantKey ? ONE_PIECE_VARIANT_LABELS[variantKey] : '';
         const baseName = typeof card.name === 'string' ? card.name.trim() : '';
@@ -2473,16 +2649,25 @@ function ptcgdm_render_builder(array $config = []){
             errors.push(`Line ${idx+1}: ${parsed.error}`);
             return;
           }
-          const setId = resolveSetIdFromCode(parsed.setCode);
-          if(!setId){
+          const setIds = resolveSetIdsFromCode(parsed.setCode);
+          if(!setIds.length){
             errors.push(`Line ${idx+1}: Unknown set code “${parsed.setCodeDisplay}”.`);
             return;
           }
-          if(IS_ONE_PIECE && isOnePiecePromotionSet(setId)){
-            errors.push(`Line ${idx+1}: One Piece Promotion Cards cannot be added by code.`);
-            return;
+          let resolvedSetId = '';
+          let cardId = '';
+          for(const candidate of setIds){
+            if(IS_ONE_PIECE && isOnePiecePromotionSet(candidate)){
+              errors.push(`Line ${idx+1}: One Piece Promotion Cards cannot be added by code.`);
+              return;
+            }
+            const found = findCardIdBySetAndNumber(candidate, parsed.number);
+            if(found){
+              resolvedSetId = candidate;
+              cardId = found;
+              break;
+            }
           }
-          const cardId = findCardIdBySetAndNumber(setId, parsed.number);
           if(!cardId){
             const cardLookupError = `Card ${parsed.setCodeDisplay} ${parsed.numberDisplay} not found.`;
             errors.push(`Line ${idx+1}: ${cardLookupError}`);
@@ -2854,25 +3039,33 @@ function ptcgdm_render_builder(array $config = []){
         };
       }
 
-      function resolveSetIdFromCode(code){
-        if(!code) return '';
+      function resolveSetIdsFromCode(code){
+        if(!code) return [];
         const raw = String(code).trim();
-        if(!raw) return '';
+        if(!raw) return [];
         const upper = raw.toUpperCase();
+        if(DATASET_KEY === 'riftbound' && upper === 'OGN'){
+          const candidates = ['origins', 'origins-proving-grounds'];
+          return candidates.filter(id => allowedSetIds.has(id));
+        }
         const variants = [upper, upper.replace(/\s+/g,''), upper.replace(/-/g,'')];
         for(const variant of variants){
           if(!variant) continue;
-          if(setCodeLookup.has(variant)) return setCodeLookup.get(variant);
+          if(setCodeLookup.has(variant)) return [setCodeLookup.get(variant)];
         }
         const lower = raw.toLowerCase();
-        if(ALLOWED_SET_IDS.has(lower)) return lower;
+        if(allowedSetIds.has(lower)) return [lower];
         for(const variant of variants){
           const lowerVariant = variant.toLowerCase();
-          if(ALLOWED_SET_IDS.has(lowerVariant)) return lowerVariant;
+          if(allowedSetIds.has(lowerVariant)) return [lowerVariant];
           const upperVariant = lowerVariant.toUpperCase();
-          if(setCodeLookup.has(upperVariant)) return setCodeLookup.get(upperVariant);
+          if(setCodeLookup.has(upperVariant)) return [setCodeLookup.get(upperVariant)];
         }
-        return '';
+        return [];
+      }
+
+      function resolveSetIdFromCode(code){
+        return resolveSetIdsFromCode(code)[0] || '';
       }
 
       function isOnePiecePromotionSet(setId){
@@ -9157,6 +9350,8 @@ function ptcgdm_assign_product_categories($product, array $card_data, array $car
   $game_label = '';
   if ($normalized_dataset === 'one_piece') {
     $game_label = 'One Piece TCG';
+  } elseif ($normalized_dataset === 'riftbound') {
+    $game_label = 'Riftbound TCG';
   } else {
     $game_label = 'Pokemon TCG';
   }
@@ -10397,6 +10592,10 @@ function ptcgdm_render_one_piece_inventory() {
   ptcgdm_render_builder(ptcgdm_get_dataset_settings('one_piece'));
 }
 
+function ptcgdm_render_riftbound_inventory() {
+  ptcgdm_render_builder(ptcgdm_get_dataset_settings('riftbound'));
+}
+
 function ptcgdm_render_inventory() {
   ptcgdm_render_pokemon_inventory();
 }
@@ -10492,6 +10691,14 @@ function ptcgdm_load_set_map($set_id){
         foreach ($cards as $card) {
           if (!is_array($card) || empty($card['id'])) {
             continue;
+          }
+          if ($dataset_key === 'riftbound') {
+            $has_number = isset($card['number']) && trim((string) $card['number']) !== '';
+            $has_code = isset($card['code']) && trim((string) $card['code']) !== '';
+            $has_card_type = isset($card['cardType']) && trim((string) $card['cardType']) !== '';
+            if (!$has_number && !$has_code && !$has_card_type) {
+              continue;
+            }
           }
           $normalized = ptcgdm_normalize_dataset_card($card, $variant, $dataset_key, $label_map);
           if (!empty($normalized['id'])) {
@@ -10624,6 +10831,10 @@ function ptcgdm_normalize_dataset_card(array $card, $set_id, $dataset_key = 'pok
 
   if (empty($normalized['supertype']) && !empty($normalized['type'])) {
     $normalized['supertype'] = $normalized['type'];
+  }
+
+  if (empty($normalized['supertype']) && !empty($normalized['cardType'])) {
+    $normalized['supertype'] = $normalized['cardType'];
   }
 
   $number = ptcgdm_normalize_card_number_from_entry($normalized);
