@@ -1057,25 +1057,6 @@ function ptcgdm_render_builder(array $config = []){
     <div class="ptcg" id="ptcg-root">
       <div id="dbStatusRow"><strong>Status:</strong> <span id="dbStatus" class="muted">Loading local dataset…</span></div>
 
-      <div class="grid4" style="margin-top:12px">
-        <div>
-          <label>Set</label>
-          <select id="selSet" disabled><option value="">Loading…</option></select>
-        </div>
-        <div>
-          <label>Supertype</label>
-          <select id="selSupertype" disabled>
-            <option value="">Choose…</option>
-            <?php foreach ($supertype_options as $option) :
-              $option = trim((string) $option);
-              if ($option === '') continue;
-            ?>
-              <option><?php echo esc_html($option); ?></option>
-            <?php endforeach; ?>
-          </select>
-        </div>
-      </div>
-
       <div class="row" style="margin-top:12px;align-items:flex-end">
         <div style="flex:1 1 420px">
           <p class="description" id="deckLoadStatus" data-default="<?php echo esc_attr($load_message); ?>"><?php echo esc_html($load_message); ?></p>
@@ -1107,6 +1088,25 @@ function ptcgdm_render_builder(array $config = []){
         </div>
       </div>
       <?php endif; ?>
+
+      <div class="grid4" style="margin-top:12px">
+        <div>
+          <label>Set</label>
+          <select id="selSet" disabled><option value="">Loading…</option></select>
+        </div>
+        <div>
+          <label>Supertype</label>
+          <select id="selSupertype" disabled>
+            <option value="">Choose…</option>
+            <?php foreach ($supertype_options as $option) :
+              $option = trim((string) $option);
+              if ($option === '') continue;
+            ?>
+              <option><?php echo esc_html($option); ?></option>
+            <?php endforeach; ?>
+          </select>
+        </div>
+      </div>
 
       <div class="row" style="margin-top:12px;align-items:flex-end">
         <div style="flex:1 1 600px"><label>Name (type to filter)</label><input id="nameInput" placeholder="e.g., Pikachu, Nest Ball"></div>
@@ -1344,8 +1344,8 @@ function ptcgdm_render_builder(array $config = []){
         'Mega Evolution': ['me1']
       };
 
-      const SERIES_CONFIG = (SAVE_CONFIG.seriesConfig && typeof SAVE_CONFIG.seriesConfig === 'object' && !Array.isArray(SAVE_CONFIG.seriesConfig))
-        ? SAVE_CONFIG.seriesConfig
+      const SERIES_CONFIG = (SAVE_CONFIG.seriesConfig && typeof SAVE_CONFIG.seriesConfig === 'object')
+        ? (Array.isArray(SAVE_CONFIG.seriesConfig) ? {} : SAVE_CONFIG.seriesConfig)
         : DEFAULT_SERIES_CONFIG;
 
       function normaliseGroupEntries(entries) {
