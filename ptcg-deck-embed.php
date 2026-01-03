@@ -937,6 +937,19 @@ function ptcgdm_render_builder(array $config = []){
       'qty_header'   => 'Qty',
       'price_header' => 'Price',
     ];
+  } elseif ($dataset_key === 'riftbound') {
+    $inventory_variant_columns[] = [
+      'key'          => 'normal',
+      'label'        => 'Normal',
+      'qty_header'   => 'Qty (Normal)',
+      'price_header' => 'Price (Normal)',
+    ];
+    $inventory_variant_columns[] = [
+      'key'          => 'foil',
+      'label'        => 'Foil',
+      'qty_header'   => 'Qty (Foil)',
+      'price_header' => 'Price (Foil)',
+    ];
   } else {
     $inventory_variant_columns[] = [
       'key'          => 'normal',
