@@ -2649,16 +2649,25 @@ function ptcgdm_render_builder(array $config = []){
             errors.push(`Line ${idx+1}: ${parsed.error}`);
             return;
           }
-          const setId = resolveSetIdFromCode(parsed.setCode);
-          if(!setId){
+          const setIds = resolveSetIdsFromCode(parsed.setCode);
+          if(!setIds.length){
             errors.push(`Line ${idx+1}: Unknown set code “${parsed.setCodeDisplay}”.`);
             return;
           }
-          if(IS_ONE_PIECE && isOnePiecePromotionSet(setId)){
-            errors.push(`Line ${idx+1}: One Piece Promotion Cards cannot be added by code.`);
-            return;
+          let resolvedSetId = '';
+          let cardId = '';
+          for(const candidate of setIds){
+            if(IS_ONE_PIECE && isOnePiecePromotionSet(candidate)){
+              errors.push(`Line ${idx+1}: One Piece Promotion Cards cannot be added by code.`);
+              return;
+            }
+            const found = findCardIdBySetAndNumber(candidate, parsed.number);
+            if(found){
+              resolvedSetId = candidate;
+              cardId = found;
+              break;
+            }
           }
-          const cardId = findCardIdBySetAndNumber(setId, parsed.number);
           if(!cardId){
             const cardLookupError = `Card ${parsed.setCodeDisplay} ${parsed.numberDisplay} not found.`;
             errors.push(`Line ${idx+1}: ${cardLookupError}`);
@@ -3030,25 +3039,33 @@ function ptcgdm_render_builder(array $config = []){
         };
       }
 
-      function resolveSetIdFromCode(code){
-        if(!code) return '';
+      function resolveSetIdsFromCode(code){
+        if(!code) return [];
         const raw = String(code).trim();
-        if(!raw) return '';
+        if(!raw) return [];
         const upper = raw.toUpperCase();
+        if(DATASET_KEY === 'riftbound' && upper === 'OGN'){
+          const candidates = ['origins', 'origins-proving-grounds'];
+          return candidates.filter(id => allowedSetIds.has(id));
+        }
         const variants = [upper, upper.replace(/\s+/g,''), upper.replace(/-/g,'')];
         for(const variant of variants){
           if(!variant) continue;
-          if(setCodeLookup.has(variant)) return setCodeLookup.get(variant);
+          if(setCodeLookup.has(variant)) return [setCodeLookup.get(variant)];
         }
         const lower = raw.toLowerCase();
-        if(allowedSetIds.has(lower)) return lower;
+        if(allowedSetIds.has(lower)) return [lower];
         for(const variant of variants){
           const lowerVariant = variant.toLowerCase();
-          if(allowedSetIds.has(lowerVariant)) return lowerVariant;
+          if(allowedSetIds.has(lowerVariant)) return [lowerVariant];
           const upperVariant = lowerVariant.toUpperCase();
-          if(setCodeLookup.has(upperVariant)) return setCodeLookup.get(upperVariant);
+          if(setCodeLookup.has(upperVariant)) return [setCodeLookup.get(upperVariant)];
         }
-        return '';
+        return [];
+      }
+
+      function resolveSetIdFromCode(code){
+        return resolveSetIdsFromCode(code)[0] || '';
       }
 
       function isOnePiecePromotionSet(setId){
