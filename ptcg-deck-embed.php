@@ -1185,10 +1185,11 @@ function ptcgdm_render_builder(array $config = []){
       <h3 style="margin:24px 0 8px"><?php echo esc_html($saved_inventory_heading ?? 'Saved Inventory'); ?></h3>
       <div class="row" style="margin:0 0 8px;align-items:center;justify-content:flex-end">
         <div style="display:flex;align-items:center;gap:8px">
-          <label for="inventorySortMode" style="margin:0;font-size:12px;color:var(--muted);">Sort saved cards</label>
+          <label for="inventorySortMode" style="margin:0;font-size:12px;color:var(--muted);">Filter type</label>
           <select id="inventorySortMode">
-            <option value="alpha">Name (A→Z)</option>
-            <option value="number">Card No.</option>
+            <option value="alpha">Alphabetical</option>
+            <option value="number">No.</option>
+            <option value="price">Price</option>
           </select>
         </div>
       </div>
@@ -1537,7 +1538,12 @@ function ptcgdm_render_builder(array $config = []){
       const inventoryData = [];
       const inventorySavedMap = new Map();
       const inventoryBulkSelection = new Set();
-      let inventorySortMode = (SAVE_CONFIG.inventorySortDefault === 'number') ? 'number' : 'alpha';
+      const getInitialInventorySortMode = () => {
+        if (SAVE_CONFIG.inventorySortDefault === 'number') return 'number';
+        if (SAVE_CONFIG.inventorySortDefault === 'price') return 'price';
+        return 'alpha';
+      };
+      let inventorySortMode = getInitialInventorySortMode();
 
       if (els.btnSaveDeck) {
         els.btnSaveDeck.dataset.defaultLabel = els.btnSaveDeck.textContent || '';
@@ -1959,6 +1965,29 @@ function ptcgdm_render_builder(array $config = []){
         if(Number.isFinite(price)) out.price = price;
         return Object.keys(out).length ? out : null;
       }
+
+      function getInventoryEntryMinPrice(entry){
+        if(!entry || typeof entry !== 'object') return Number.NaN;
+        const variants = entry.variants && typeof entry.variants === 'object' ? entry.variants : {};
+        let minPrice = Number.NaN;
+        Object.values(variants).forEach(variant => {
+          if(!variant || typeof variant !== 'object') return;
+          if(Array.isArray(variant.patterns)){
+            variant.patterns.forEach(pattern => {
+              if(!pattern || typeof pattern !== 'object') return;
+              const price = parsePriceValue(pattern.price);
+              if(Number.isFinite(price)){
+                minPrice = Number.isFinite(minPrice) ? Math.min(minPrice, price) : price;
+              }
+            });
+          }
+          const price = parsePriceValue(variant.price);
+          if(Number.isFinite(price)){
+            minPrice = Number.isFinite(minPrice) ? Math.min(minPrice, price) : price;
+          }
+        });
+        return minPrice;
+      }
       let deckJsonCache='';
       let defaultLoadMessage = els.deckLoadStatus ? (els.deckLoadStatus.dataset?.default || els.deckLoadStatus.textContent || '') : '';
 
@@ -2038,12 +2067,14 @@ function ptcgdm_render_builder(array $config = []){
           els.inventoryBulkDelete.addEventListener('click', handleInventoryBulkDelete);
         }
         if (IS_INVENTORY && els.inventorySortMode) {
-          if (inventorySortMode !== 'number' && inventorySortMode !== 'alpha') {
-            inventorySortMode = els.inventorySortMode.value === 'number' ? 'number' : 'alpha';
+          if (!['alpha', 'number', 'price'].includes(inventorySortMode)) {
+            inventorySortMode = getInitialInventorySortMode();
           }
           els.inventorySortMode.value = inventorySortMode;
           els.inventorySortMode.addEventListener('change', ()=>{
-            const mode = els.inventorySortMode.value === 'number' ? 'number' : 'alpha';
+            const mode = ['alpha', 'number', 'price'].includes(els.inventorySortMode.value)
+              ? els.inventorySortMode.value
+              : 'alpha';
             if (mode !== inventorySortMode) {
               inventorySortMode = mode;
               renderInventoryDataTable();
@@ -3386,6 +3417,7 @@ function ptcgdm_render_builder(array $config = []){
             const numberSortSource = card?.number ? String(card.number) : numberDisplay;
             const numberKey = String(numberSortSource || '').toUpperCase();
             const searchKey = getCardSearchName(card) || norm(displayName);
+            const priceKey = getInventoryEntryMinPrice(entry);
             return {
               entry,
               entryId,
@@ -3399,6 +3431,7 @@ function ptcgdm_render_builder(array $config = []){
               setSortKey,
               number: numberDisplay,
               numberKey,
+              priceKey,
               supertype,
             };
           }).filter(Boolean);
@@ -3448,6 +3481,16 @@ function ptcgdm_render_builder(array $config = []){
 
         const workingList = filteredMetaList.slice();
         workingList.sort((a, b)=>{
+          if(inventorySortMode === 'price'){
+            const priceA = Number.isFinite(a.priceKey) ? a.priceKey : Number.POSITIVE_INFINITY;
+            const priceB = Number.isFinite(b.priceKey) ? b.priceKey : Number.POSITIVE_INFINITY;
+            if(priceA !== priceB) return priceA - priceB;
+            const nameCmp = a.nameKey.localeCompare(b.nameKey);
+            if(nameCmp !== 0) return nameCmp;
+            const setNameCmp = a.setNameKey.localeCompare(b.setNameKey);
+            if(setNameCmp !== 0) return setNameCmp;
+            return a.entryId.localeCompare(b.entryId);
+          }
           if(inventorySortMode === 'number'){
             const setCmp = a.setSortKey.localeCompare(b.setSortKey);
             if(setCmp !== 0) return setCmp;
