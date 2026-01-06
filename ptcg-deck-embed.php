@@ -1867,7 +1867,10 @@ function ptcgdm_render_builder(array $config = []){
             price: Number.isFinite(priceValue) ? priceValue : null,
           };
           if(hasPatterns){
-            entry.variants[key].patterns = patterns;
+            entry.variants[key].patterns = patterns.map(pattern => ({
+              ...pattern,
+              qty: 0,
+            }));
             hasData = true;
           }
         });
