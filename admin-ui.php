@@ -23,8 +23,10 @@ function ptcgdm_admin_ui_is_authorized() {
 function ptcgdm_strip_admin_ui_headings($content) {
   $content = preg_replace('~<h1[^>]*>\s*PTCG Deck \xe2\x80\x93 Card Inventory\s*</h1>~ui', '', $content);
   $content = preg_replace('~<h1[^>]*>\s*One Piece TCG \xe2\x80\x93 Card Inventory\s*</h1>~ui', '', $content);
+  $content = preg_replace('~<h1[^>]*>\s*Riftbound \xe2\x80\x93 Card Inventory\s*</h1>~ui', '', $content);
   $content = preg_replace('~<p[^>]*class="description"[^>]*>\s*Maintain a single card inventory list using the local dataset\.\s*</p>~ui', '', $content);
   $content = preg_replace('~<p[^>]*class="description"[^>]*>\s*Track One Piece TCG card inventory using the local dataset\.\s*</p>~ui', '', $content);
+  $content = preg_replace('~<p[^>]*class="description"[^>]*>\s*Track Riftbound card inventory using the local dataset\.\s*</p>~ui', '', $content);
 
   return $content;
 }
@@ -279,6 +281,10 @@ function ptcgdm_get_admin_ui_content() {
     'one_piece' => [
       'label'   => 'One Piece Inventory',
       'iframe_srcdoc' => ptcgdm_admin_ui_frame_srcdoc(ptcgdm_capture_admin_ui_panel('ptcgdm_render_one_piece_inventory')),
+    ],
+    'riftbound' => [
+      'label'   => 'Riftbound Inventory',
+      'iframe_srcdoc' => ptcgdm_admin_ui_frame_srcdoc(ptcgdm_capture_admin_ui_panel('ptcgdm_render_riftbound_inventory')),
     ],
     'orders' => [
       'label'   => 'Orders',
